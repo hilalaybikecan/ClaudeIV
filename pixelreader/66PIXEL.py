@@ -236,8 +236,13 @@ def comp_to_group(comp: int) -> int:
     return comp - 1  # 3..9 -> 2..8
 
 # ---------------------------- Experimental conditions ----------------------------
-def load_experimental_conditions(excel_path: Optional[str] = None) -> Optional[pd.DataFrame]:
-    """Load experimental conditions from Excel file"""
+def load_experimental_conditions(excel_path: Optional[str] = None) -> tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """Load experimental conditions from Excel file
+    
+    Returns:
+        tuple: (conditions_df, runsheet_df) where conditions_df is from ROSIE sheet
+               and runsheet_df is from Runsheet sheet
+    """
     if excel_path is None:
         # Try to find experiment sheets in the same directory
         excel_path = Path(__file__).parent / "experiment sheets.xlsx"
@@ -248,152 +253,227 @@ def load_experimental_conditions(excel_path: Optional[str] = None) -> Optional[p
     
     if not excel_path.exists():
         print(f"Excel file not found: {excel_path}")
-        return None
+        return None, None
     
     try:
         # Check available sheets first
         xlsx = pd.ExcelFile(excel_path)
         print(f"Available sheets: {xlsx.sheet_names}")
         
-        # Load the ROSIE sheet which contains the actual experimental parameters
-        if 'ROSIE' not in xlsx.sheet_names:
+        conditions_df = None
+        runsheet_df = None
+        
+        # Load ROSIE sheet if available
+        if 'ROSIE' in xlsx.sheet_names:
+            conditions_df = pd.read_excel(excel_path, sheet_name='ROSIE')
+            print(f"Successfully loaded {len(conditions_df)} rows from ROSIE sheet")
+        else:
             print("'ROSIE' sheet not found in Excel file")
-            # Fallback to Runsheet if ROSIE not available
-            if 'Runsheet' in xlsx.sheet_names:
-                print("Falling back to 'Runsheet' sheet")
-                conditions_df = pd.read_excel(excel_path, sheet_name='Runsheet')
-                print(f"Successfully loaded {len(conditions_df)} rows from Runsheet")
-                return conditions_df
-            return None
+        
+        # Load Runsheet if available
+        if 'Runsheet' in xlsx.sheet_names:
+            runsheet_df = pd.read_excel(excel_path, sheet_name='Runsheet')
+            print(f"Successfully loaded {len(runsheet_df)} rows from Runsheet")
+        else:
+            print("'Runsheet' sheet not found in Excel file")
+        
+        # If neither sheet is found, return None
+        if conditions_df is None and runsheet_df is None:
+            print("Neither 'ROSIE' nor 'Runsheet' sheets found")
+            return None, None
             
-        conditions_df = pd.read_excel(excel_path, sheet_name='ROSIE')
-        print(f"Successfully loaded {len(conditions_df)} rows from ROSIE sheet")
-        return conditions_df
+        # If only Runsheet is available, use it as conditions_df for backwards compatibility
+        if conditions_df is None and runsheet_df is not None:
+            print("Using Runsheet as conditions_df for backwards compatibility")
+            conditions_df = runsheet_df
+            
+        return conditions_df, runsheet_df
+        
     except Exception as e:
         print(f"Error loading experimental conditions: {e}")
         import traceback
         traceback.print_exc()
-        return None
+        return None, None
 
-def analyze_sweep_parameters(conditions_df: pd.DataFrame) -> Dict[int, Dict]:
-    """Analyze what parameters vary within each sweep"""
+def detect_varying_columns(sweep_data: pd.DataFrame, threshold: float = 0.01) -> List[str]:
+    """Detect which columns have meaningful variation within a sweep
+    
+    Args:
+        sweep_data: DataFrame containing data for a single sweep
+        threshold: Minimum relative variation to consider significant
+    
+    Returns:
+        List of column names that show meaningful variation
+    """
+    varying_columns = []
+    
+    # Skip non-numeric columns and known identifier columns
+    skip_columns = {'Substrate', 'Sweep', 'Sample', 'Position', 'Pixel'}
+    
+    for col in sweep_data.columns:
+        if col in skip_columns:
+            continue
+            
+        # Only check numeric columns
+        if not pd.api.types.is_numeric_dtype(sweep_data[col]):
+            continue
+            
+        # Get non-null, non-zero values
+        values = sweep_data[col].dropna()
+        nonzero_values = values[values > 0]
+        
+        if len(nonzero_values) < 2:
+            continue
+            
+        # Calculate relative variation
+        min_val, max_val = nonzero_values.min(), nonzero_values.max()
+        if min_val > 0:
+            relative_variation = (max_val - min_val) / min_val
+            if relative_variation > threshold:
+                varying_columns.append(col)
+        else:
+            # For values that can be zero, use absolute variation
+            if (max_val - min_val) > threshold:
+                varying_columns.append(col)
+                
+    return varying_columns
+
+
+def generate_param_name(column_name: str) -> str:
+    """Generate clean parameter name from column header
+    
+    Args:
+        column_name: Original column name from Excel
+        
+    Returns:
+        Clean, formatted parameter name
+    """
+    # Remove common units and formatting
+    clean_name = column_name.strip()
+    
+    # Remove concentration units like (M), (mM), etc.
+    clean_name = re.sub(r'\s*\([mM]*[Mm]*\)\s*$', '', clean_name)
+    
+    # Handle common chemical names and abbreviations
+    replacements = {
+        'PbI2': 'PbI₂',
+        'excess PbI2': 'Excess PbI₂', 
+        'with Thiourea': 'Thiourea',
+        'with FABF4': 'FABF₄',
+        'FABF4': 'FABF₄',
+        'CsI': 'CsI',
+        'FAI': 'FAI', 
+        'DMAI': 'DMAI',
+        'DMPU': 'DMPU',
+        'MAI': 'MAI'
+    }
+    
+    for old, new in replacements.items():
+        if old in clean_name:
+            clean_name = clean_name.replace(old, new)
+            break
+    
+    return clean_name
+
+
+def classify_sweep_type(varying_params: List[str], param_info: Dict) -> str:
+    """Classify sweep type and generate description
+    
+    Args:
+        varying_params: List of varying parameter names
+        param_info: Dictionary with parameter details
+        
+    Returns:
+        Descriptive string for the sweep type
+    """
+    n_params = len(varying_params)
+    
+    if n_params == 0:
+        return "Control (no variation)"
+    elif n_params == 1:
+        param_name = generate_param_name(varying_params[0])
+        param_range = param_info[varying_params[0]]['range']
+        return f"{param_name} ({param_range[0]:.3f}–{param_range[1]:.3f})"
+    elif n_params == 2:
+        param1 = generate_param_name(varying_params[0])
+        param2 = generate_param_name(varying_params[1])
+        return f"{param1} × {param2} (2D)"
+    else:
+        param_names = [generate_param_name(p) for p in varying_params[:3]]
+        if n_params > 3:
+            return f"{' × '.join(param_names)} + {n_params-3} more ({n_params}D)"
+        else:
+            return f"{' × '.join(param_names)} ({n_params}D)"
+
+
+def analyze_sweep_parameters(conditions_df: pd.DataFrame, runsheet_df: Optional[pd.DataFrame] = None) -> Dict[int, Dict]:
+    """Analyze what parameters vary within each sweep using Runsheet data for robustness
+    
+    Args:
+        conditions_df: DataFrame from ROSIE sheet (for backwards compatibility)  
+        runsheet_df: DataFrame from Runsheet sheet (preferred for analysis)
+    
+    Returns:
+        Dictionary mapping sweep IDs to analysis results
+    """
     sweep_analysis = {}
     
-    # Check which sheet format we're using by examining columns
-    if 'excess PbI2' in conditions_df.columns:
-        # ROSIE sheet format - correct experimental parameters
-        param_columns = [
-            'excess PbI2', 
-            'with Thiourea', 
-            'with FABF4',
-            'FA30Cs70PbI3 DMAI (dmai=high dmpu=low)',
-            'FA30Cs70PbI3 DMAI (dmai=low dmpu=low)', 
-            'FA30Cs70PbI3 DMAI (dmai=low dmpu=high)', 
-            'FA30Cs70PbI3 DMAI (dmai=high dmpu=high)', 
-            'FA30CS70PbI3 MAI'
-        ]
-    else:
-        # Runsheet format - fallback
-        param_columns = ['PbI2 (M)', 'CsI (M)', 'FAI (M)', 'DMAI (M)', 'DMPU (M)', 'Thiourea (M)', 'FABF4 (M)', 'MAI (M)']
+    # Use runsheet_df if available, otherwise fall back to conditions_df
+    analysis_df = runsheet_df if runsheet_df is not None else conditions_df
     
-    for sweep_id in conditions_df['Sweep'].unique():
-        sweep_data = conditions_df[conditions_df['Sweep'] == sweep_id]
+    print(f"[SWEEP ANALYSIS] Using {'Runsheet' if runsheet_df is not None else 'conditions'} data for analysis")
+    print(f"[SWEEP ANALYSIS] Columns available: {list(analysis_df.columns)}")
+    
+    # Get unique sweeps
+    if 'Sweep' not in analysis_df.columns:
+        print("[SWEEP ANALYSIS] ERROR: No 'Sweep' column found in analysis data")
+        return {}
         
-        varying_params = []
-        constant_params = []
+    unique_sweeps = analysis_df['Sweep'].unique()
+    print(f"[SWEEP ANALYSIS] Found {len(unique_sweeps)} unique sweeps: {sorted(unique_sweeps)}")
+    
+    for sweep_id in unique_sweeps:
+        print(f"\n[SWEEP ANALYSIS] Analyzing Sweep {sweep_id}")
+        sweep_data = analysis_df[analysis_df['Sweep'] == sweep_id]
+        print(f"[SWEEP ANALYSIS] Sweep {sweep_id} has {len(sweep_data)} entries")
+        
+        # Detect varying columns using our new helper function
+        varying_params = detect_varying_columns(sweep_data, threshold=0.01)
+        print(f"[SWEEP ANALYSIS] Sweep {sweep_id} varying parameters: {varying_params}")
+        
+        # Build parameter info for varying parameters
         param_info = {}
+        for col in varying_params:
+            values = sweep_data[col].dropna()
+            nonzero_values = values[values > 0]
+            if len(nonzero_values) > 0:
+                param_info[col] = {
+                    'type': 'varying',
+                    'values': sorted(nonzero_values.unique()),
+                    'range': [nonzero_values.min(), nonzero_values.max()]
+                }
         
-        for col in param_columns:
-            if col in sweep_data.columns:
-                # Get unique values, filter out zeros, and check for actual variation
-                all_vals = sweep_data[col].dropna()
-                nonzero_vals = all_vals[all_vals > 0]
-                unique_vals = np.unique(nonzero_vals)  # This removes duplicates properly
+        # Also track constant parameters with significant values
+        constant_params = []
+        skip_columns = {'Substrate', 'Sweep', 'Sample', 'Position', 'Pixel'}
+        for col in analysis_df.columns:
+            if col in skip_columns or col in varying_params:
+                continue
+            if not pd.api.types.is_numeric_dtype(analysis_df[col]):
+                continue
                 
-                if len(unique_vals) > 1:
-                    varying_params.append(col)
-                    param_info[col] = {
-                        'type': 'varying',
-                        'values': sorted(unique_vals),
-                        'range': [min(unique_vals), max(unique_vals)]
-                    }
-                elif len(unique_vals) == 1:
-                    constant_params.append(col)
-                    param_info[col] = {
-                        'type': 'constant',
-                        'value': unique_vals[0]
-                    }
+            values = sweep_data[col].dropna()
+            nonzero_values = values[values > 0]
+            if len(nonzero_values) > 0 and nonzero_values.nunique() == 1:
+                constant_params.append(col)
+                param_info[col] = {
+                    'type': 'constant',
+                    'value': nonzero_values.iloc[0]
+                }
         
-        # Identify main varying parameters by their range of variation
-        # Filter out parameters with very small variations (likely experimental noise)
-        main_varying_params = []
-        for param in varying_params:
-            param_range = param_info[param]['range']
-            variation_range = param_range[1] - param_range[0]
-            relative_variation = variation_range / param_range[0] if param_range[0] > 0 else 0
-            
-            # Different thresholds for different parameter types
-            if 'excess PbI2' in param or 'with Thiourea' in param or 'with FABF4' in param:
-                # These are additive parameters, smaller absolute changes are significant
-                if variation_range > 0.005 or relative_variation > 0.1:  # 5mM or 10%
-                    main_varying_params.append(param)
-            else:
-                # DMAI/MAI composition parameters - larger changes expected
-                if variation_range > 0.01 or relative_variation > 0.05:  # 10mM or 5%
-                    main_varying_params.append(param)
-        
-        # Helper function to create clean parameter names
-        def clean_param_name(param_name):
-            if param_name == 'excess PbI2':
-                return 'Excess PbI2'
-            elif param_name == 'with Thiourea':
-                return 'Thiourea'
-            elif param_name == 'with FABF4':
-                return 'FABF4'
-            elif 'DMAI' in param_name and 'high' in param_name and 'low' in param_name:
-                return 'DMAI (high/low DMPU)'
-            elif 'DMAI' in param_name and 'low' in param_name and 'low' in param_name:
-                return 'DMAI (low/low DMPU)'
-            elif 'DMAI' in param_name and 'low' in param_name and 'high' in param_name:
-                return 'DMAI (low/high DMPU)'
-            elif 'DMAI' in param_name and 'high' in param_name and 'high' in param_name:
-                return 'DMAI (high/high DMPU)'
-            elif 'MAI' in param_name:
-                return 'MAI'
-            else:
-                return param_name.replace(' (M)', '')
-        
-        # Create descriptive name based on main varying parameters
-        if len(main_varying_params) == 1:
-            main_param = clean_param_name(main_varying_params[0])
-            param_range = param_info[main_varying_params[0]]['range']
-            if 'excess' in main_param.lower() or 'thiourea' in main_param.lower() or 'fabf4' in main_param.lower():
-                desc = f"{main_param} variation ({param_range[0]:.3f}-{param_range[1]:.3f})"
-            else:
-                desc = f"{main_param} variation ({param_range[0]:.3f}-{param_range[1]:.3f}M)"
-        elif len(main_varying_params) == 2:
-            param1 = clean_param_name(main_varying_params[0])
-            param2 = clean_param_name(main_varying_params[1])
-            desc = f"{param1} vs {param2} (2D)"
-        elif len(main_varying_params) > 2:
-            param_names = [clean_param_name(p) for p in main_varying_params]
-            if len(param_names) <= 3:
-                desc = f"{'/'.join(param_names)} (multi-parameter)"
-            else:
-                desc = f"Multi-parameter ({len(main_varying_params)} variables)"
-        elif len(varying_params) > 0:  # Minor variations only
-            # Find the parameter with largest variation among the "varying" ones
-            max_var_param = max(varying_params, key=lambda p: param_info[p]['range'][1] - param_info[p]['range'][0])
-            main_param = clean_param_name(max_var_param)
-            desc = f"{main_param} (minor variations)"
-        else:
-            # Find the main constant parameter
-            main_constant = None
-            for col in constant_params:
-                if param_info[col]['value'] > 0.01:  # Significant concentration
-                    main_constant = clean_param_name(col)
-                    break
-            desc = f"Control ({main_constant or 'base'} composition)"
+        # Generate description using our new helper function
+        desc = classify_sweep_type(varying_params, param_info)
+        print(f"[SWEEP ANALYSIS] Sweep {sweep_id} description: {desc}")
         
         sweep_analysis[sweep_id] = {
             'description': desc,
@@ -491,6 +571,7 @@ class JVApp(tk.Tk):
         
         # Experimental conditions
         self.conditions_df: Optional[pd.DataFrame] = None
+        self.runsheet_df: Optional[pd.DataFrame] = None
         self.excel_path_var = tk.StringVar(value="experiment sheets.xlsx")
         self.sweep_analysis: Dict[int, Dict] = {}
         self.selected_sweep_id = tk.IntVar(value=-1)  # -1 means all sweeps
@@ -763,16 +844,16 @@ class JVApp(tk.Tk):
             print(f"[AUTO LOAD] Excel path from var: {excel_path}")
             if excel_path and Path(excel_path).exists():
                 print(f"[AUTO LOAD] Loading from specified path: {excel_path}")
-                self.conditions_df = load_experimental_conditions(excel_path)
-                print(f"[AUTO LOAD] Result from specified path: {self.conditions_df is not None}")
+                self.conditions_df, self.runsheet_df = load_experimental_conditions(excel_path)
+                print(f"[AUTO LOAD] Result from specified path: conditions={self.conditions_df is not None}, runsheet={self.runsheet_df is not None}")
             else:
                 # Try default path
                 default_path = Path(__file__).parent / "experiment sheets.xlsx"
                 print(f"[AUTO LOAD] Trying default path: {default_path}")
                 print(f"[AUTO LOAD] Default path exists: {default_path.exists()}")
                 if default_path.exists():
-                    self.conditions_df = load_experimental_conditions(str(default_path))
-                    print(f"[AUTO LOAD] Result from default path: {self.conditions_df is not None}")
+                    self.conditions_df, self.runsheet_df = load_experimental_conditions(str(default_path))
+                    print(f"[AUTO LOAD] Result from default path: conditions={self.conditions_df is not None}, runsheet={self.runsheet_df is not None}")
                     if self.conditions_df is not None:
                         self.excel_path_var.set(str(default_path))
                         print(f"[AUTO LOAD] Set excel_path_var to: {default_path}")
@@ -780,6 +861,11 @@ class JVApp(tk.Tk):
                     print("[AUTO LOAD] No valid paths found")
         
         all_sweeps = map_sweeps_to_conditions(all_sweeps, self.conditions_df)
+        
+        # Analyze sweep parameters if conditions were loaded
+        if self.conditions_df is not None:
+            self.sweep_analysis = analyze_sweep_parameters(self.conditions_df, self.runsheet_df)
+            print(f"[AUTO LOAD] Sweep analysis completed for {len(self.sweep_analysis)} sweeps")
         
         self.data = all_sweeps
         self.df = self._to_dataframe(all_sweeps)
@@ -1288,8 +1374,9 @@ class JVApp(tk.Tk):
         print(f"[MANUAL LOAD] Current working directory: {Path.cwd()}")
         print(f"[MANUAL LOAD] Excel file exists: {Path(excel_path).exists()}")
         
-        self.conditions_df = load_experimental_conditions(excel_path)
-        print(f"[MANUAL LOAD] Result is None: {self.conditions_df is None}")
+        self.conditions_df, self.runsheet_df = load_experimental_conditions(excel_path)
+        print(f"[MANUAL LOAD] Conditions result is None: {self.conditions_df is None}")
+        print(f"[MANUAL LOAD] Runsheet result is None: {self.runsheet_df is None}")
         
         if self.conditions_df is None:
             print("[MANUAL LOAD] ERROR: conditions_df is None - showing error dialog")
@@ -1297,11 +1384,12 @@ class JVApp(tk.Tk):
         else:
             has_excess_pbi2 = 'excess PbI2' in self.conditions_df.columns
             sheet_type = "ROSIE" if has_excess_pbi2 else "Runsheet"
-            print(f"[MANUAL LOAD] SUCCESS: Loaded {sheet_type} sheet with {len(self.conditions_df)} entries")
-            messagebox.showinfo("Success", f"Loaded {len(self.conditions_df)} entries from {sheet_type} sheet")
+            runsheet_info = f" + Runsheet ({len(self.runsheet_df)} entries)" if self.runsheet_df is not None else ""
+            print(f"[MANUAL LOAD] SUCCESS: Loaded {sheet_type} sheet with {len(self.conditions_df)} entries{runsheet_info}")
+            messagebox.showinfo("Success", f"Loaded {len(self.conditions_df)} entries from {sheet_type} sheet{runsheet_info}")
             
-            # Analyze sweep parameters
-            self.sweep_analysis = analyze_sweep_parameters(self.conditions_df)
+            # Analyze sweep parameters using both sheets
+            self.sweep_analysis = analyze_sweep_parameters(self.conditions_df, self.runsheet_df)
             self.update_sweep_selection_options()
             self.refresh_sweep_info()  # Update the summary table immediately
             
@@ -1521,11 +1609,13 @@ class JVApp(tk.Tk):
         param_col = analysis['varying_params'][0]
         param_name = param_col.replace(' (M)', '')
         
-        # Get parameter values from conditions_df
-        if self.conditions_df is None:
+        # Get parameter values from the appropriate sheet
+        # Use runsheet_df if available since that's where our analysis comes from
+        source_df = self.runsheet_df if self.runsheet_df is not None else self.conditions_df
+        if source_df is None:
             return
             
-        sweep_conditions = self.conditions_df[self.conditions_df['Sweep'] == sweep_id]
+        sweep_conditions = source_df[source_df['Sweep'] == sweep_id]
         
         # Map measurements to specific experimental conditions using Well ID mapping
         df_matched_rows = []
@@ -1543,14 +1633,21 @@ class JVApp(tk.Tk):
                 well_id = f"{row_letter}{composition_index}"
                 
                 # Find the experimental condition for this specific Well ID
-                condition_match = sweep_conditions[
-                    (sweep_conditions['Substrate'] == substrate_id) & 
-                    (sweep_conditions['Well'] == well_id)
-                ]
+                # Handle case where Well column might not exist (e.g., in Runsheet)
+                if 'Well' in sweep_conditions.columns:
+                    condition_match = sweep_conditions[
+                        (sweep_conditions['Substrate'] == substrate_id) & 
+                        (sweep_conditions['Well'] == well_id)
+                    ]
+                else:
+                    # For sheets without Well column, just match by substrate
+                    condition_match = sweep_conditions[
+                        sweep_conditions['Substrate'] == substrate_id
+                    ]
                 
                 if not condition_match.empty:
                     condition_row = condition_match.iloc[0]
-                    param_value = condition_row[param_col]
+                    param_value = condition_row[param_col] if param_col in condition_row.index else None
                     if pd.notna(param_value):  # Allow zero values
                         # Create a new row with matched experimental condition
                         new_row = measurement_row.copy()
@@ -1602,11 +1699,13 @@ class JVApp(tk.Tk):
         param1_name = param1_col.replace(' (M)', '')
         param2_name = param2_col.replace(' (M)', '')
         
-        # Get parameter values from conditions_df
-        if self.conditions_df is None:
+        # Get parameter values from the appropriate sheet
+        # Use runsheet_df if available since that's where our analysis comes from
+        source_df = self.runsheet_df if self.runsheet_df is not None else self.conditions_df
+        if source_df is None:
             return
             
-        sweep_conditions = self.conditions_df[self.conditions_df['Sweep'] == sweep_id]
+        sweep_conditions = source_df[source_df['Sweep'] == sweep_id]
         
         # Map measurements to specific experimental conditions using Well ID mapping
         df_matched_rows = []
@@ -1622,15 +1721,22 @@ class JVApp(tk.Tk):
                 well_id = f"{row_letter}{composition_index}"
                 
                 # Find the experimental condition for this specific Well ID
-                condition_match = sweep_conditions[
-                    (sweep_conditions['Substrate'] == substrate_id) & 
-                    (sweep_conditions['Well'] == well_id)
-                ]
+                # Handle case where Well column might not exist (e.g., in Runsheet)
+                if 'Well' in sweep_conditions.columns:
+                    condition_match = sweep_conditions[
+                        (sweep_conditions['Substrate'] == substrate_id) & 
+                        (sweep_conditions['Well'] == well_id)
+                    ]
+                else:
+                    # For sheets without Well column, just match by substrate
+                    condition_match = sweep_conditions[
+                        sweep_conditions['Substrate'] == substrate_id
+                    ]
                 
                 if not condition_match.empty:
                     condition_row = condition_match.iloc[0]
-                    param1_value = condition_row[param1_col]
-                    param2_value = condition_row[param2_col]
+                    param1_value = condition_row[param1_col] if param1_col in condition_row.index else None
+                    param2_value = condition_row[param2_col] if param2_col in condition_row.index else None
                     
                     if pd.notna(param1_value) and pd.notna(param2_value):
                         # Create a new row with matched experimental condition
@@ -1682,11 +1788,13 @@ class JVApp(tk.Tk):
         param1_name = param1_col.replace(' (M)', '')
         param2_name = param2_col.replace(' (M)', '')
         
-        # Get parameter values
-        if self.conditions_df is None:
+        # Get parameter values from the appropriate sheet
+        # Use runsheet_df if available since that's where our analysis comes from
+        source_df = self.runsheet_df if self.runsheet_df is not None else self.conditions_df
+        if source_df is None:
             return
             
-        sweep_conditions = self.conditions_df[self.conditions_df['Sweep'] == sweep_id]
+        sweep_conditions = source_df[source_df['Sweep'] == sweep_id]
         
         # Map measurements to specific experimental conditions using Well ID mapping
         df_matched_rows = []
@@ -1702,15 +1810,22 @@ class JVApp(tk.Tk):
                 well_id = f"{row_letter}{composition_index}"
                 
                 # Find the experimental condition for this specific Well ID
-                condition_match = sweep_conditions[
-                    (sweep_conditions['Substrate'] == substrate_id) & 
-                    (sweep_conditions['Well'] == well_id)
-                ]
+                # Handle case where Well column might not exist (e.g., in Runsheet)
+                if 'Well' in sweep_conditions.columns:
+                    condition_match = sweep_conditions[
+                        (sweep_conditions['Substrate'] == substrate_id) & 
+                        (sweep_conditions['Well'] == well_id)
+                    ]
+                else:
+                    # For sheets without Well column, just match by substrate
+                    condition_match = sweep_conditions[
+                        sweep_conditions['Substrate'] == substrate_id
+                    ]
                 
                 if not condition_match.empty:
                     condition_row = condition_match.iloc[0]
-                    param1_value = condition_row[param1_col]
-                    param2_value = condition_row[param2_col]
+                    param1_value = condition_row[param1_col] if param1_col in condition_row.index else None
+                    param2_value = condition_row[param2_col] if param2_col in condition_row.index else None
                     
                     if pd.notna(param1_value) and pd.notna(param2_value):
                         # Create a new row with matched experimental condition
