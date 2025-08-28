@@ -20,7 +20,7 @@ class IVDataAnalyzer:
         self.measurements_data = pd.DataFrame(columns=[
             'Filename', 'Substrate ID', 'Pixel', 'Scan Direction', 
             'Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]', 
-            'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]'
+            'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]', 'Filepath'
         ])
         
         # Persistent copy for display sorting (never modified directly)
@@ -101,12 +101,13 @@ class IVDataAnalyzer:
         # Create treeview for measurements data
         columns = ('Filename', 'Substrate ID', 'Pixel', 'Scan Direction', 
                   'Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]', 
-                  'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]')
+                  'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]')
+        self.display_columns = columns
         
-        self.measurements_tree = ttk.Treeview(measurements_frame, columns=columns, show='headings')
+        self.measurements_tree = ttk.Treeview(measurements_frame, columns=self.display_columns, show='headings')
         
         # Set column headings and widths
-        for col in columns:
+        for col in self.display_columns:
             self.measurements_tree.heading(col, text=col, command=lambda c=col: self.sort_measurements_by_column(c))
             width = 80 if col != 'Filename' else 200  # Set wider for filename
             self.measurements_tree.column(col, width=width, anchor='center')
@@ -211,7 +212,7 @@ class IVDataAnalyzer:
         ttk.Label(param_frame, text="Select parameter to plot:").pack(side="left", padx=5)
         
         # Parameters for plotting
-        plot_parameters = ['Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]', 'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]']
+        plot_parameters = ['Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]', 'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]']
         self.plot_param_combobox = ttk.Combobox(param_frame, values=plot_parameters, width=30, state="readonly")
         self.plot_param_combobox.pack(side="left", padx=5)
         self.plot_param_combobox.current(0)  # Select first parameter by default
@@ -406,6 +407,10 @@ class IVDataAnalyzer:
                 data = self.parse_iv_file(filepath)
                 
                 # Add to both dataframes
+                # Align columns in case of new fields
+                for col in data.keys():
+                    if col not in self.measurements_data.columns:
+                        self.measurements_data[col] = None
                 self.measurements_data = pd.concat([self.measurements_data, pd.DataFrame([data])], ignore_index=True)
                 self.measurements_data_original = self.measurements_data.copy()
                 
@@ -417,7 +422,8 @@ class IVDataAnalyzer:
                 messagebox.showerror("Error", f"Failed to parse file {os.path.basename(filepath)}: {str(e)}")
         
         self.update_measurements_display()
-    
+        self.refresh_iv_selection()
+
     def parse_iv_file(self, filepath):
         filename = os.path.basename(filepath)
         
@@ -428,6 +434,29 @@ class IVDataAnalyzer:
         
         with open(filepath, 'r') as f:
             content = f.read()
+
+        # Extract sweep metadata to compute scan speed (V/s)
+        vstart = self.extract_value(content, r'Vstart:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)')
+        vend = self.extract_value(content, r'Vend:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)')
+        npoints = None
+        m_np = re.search(r'Number of points:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)', content)
+        if m_np:
+            try:
+                npoints = int(float(m_np.group(1)))
+            except:
+                npoints = None
+        delay_s = self.extract_value(content, r'Delay \[s\]:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)')
+        it_s = self.extract_value(content, r'Integration time \[s\]:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)')
+        scan_speed = None
+        try:
+            if vstart is not None and vend is not None and npoints and npoints > 1 and (delay_s is not None) and (it_s is not None):
+                step_time = (delay_s + it_s)
+                total_time = (npoints - 1) * step_time
+                if total_time > 0:
+                    scan_speed = abs(vend - vstart) / total_time
+        except Exception:
+            scan_speed = None
+
         
         # Extract substrate ID
         substrate_id_match = re.search(r'Deposition ID:\s*([A-Za-z0-9]+)', content)
@@ -475,6 +504,8 @@ class IVDataAnalyzer:
             'Substrate ID': substrate_id,
             'Pixel': pixel,
             'Scan Direction': scan_direction,
+            'Scan Speed [V/s]': scan_speed,
+            'Filepath': filepath,
             **analysis_outputs
         }
         
@@ -502,7 +533,7 @@ class IVDataAnalyzer:
         
         # Repopulate with sorted data
         for _, row in self.measurements_data.iterrows():
-            values = [row[col] for col in self.measurements_data.columns]
+            values = [row.get(col, '') for col in self.display_columns]
             self.measurements_tree.insert('', 'end', values=values)
     
     def remove_selected(self):
@@ -675,13 +706,13 @@ class IVDataAnalyzer:
             
             # Update the display
             self.update_measurements_display()
-            
+
         except Exception as e:
             # Fallback to string sorting if numeric sorting fails
             sorted_data = self.measurements_data_original.sort_values(by=col, ascending=not descending, na_position='last', key=lambda x: x.astype(str))
             self.measurements_data = sorted_data.copy()
             self.update_measurements_display()
-        
+
         # Update column headings to show sort direction
         for column in self.measurements_tree['columns']:
             current_text = self.measurements_tree.heading(column)['text']
@@ -954,6 +985,46 @@ class IVDataAnalyzer:
     
         browse_button = ttk.Button(control_frame, text="Load IV File", command=self.load_iv_data)
         browse_button.pack(side="left", padx=5, pady=5)
+
+        ttk.Label(control_frame, text=" or select from loaded measurements:").pack(side="left", padx=6)
+        list_frame = ttk.Frame(control_frame)
+        list_frame.pack(side="left", padx=5)
+        self.iv_listbox = tk.Listbox(list_frame, selectmode=tk.EXTENDED, height=12, width=90)
+        vsb = ttk.Scrollbar(list_frame, orient="vertical", command=self.iv_listbox.yview)
+        self.iv_listbox.configure(yscrollcommand=vsb.set)
+        self.refresh_iv_selection()
+        self.iv_listbox.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+        select_btn = ttk.Button(control_frame, text="Plot Selected", command=self.load_iv_from_selection)
+        select_btn.pack(side="left", padx=5)
+        pair_btn = ttk.Button(control_frame, text="Pair FW↔RV (auto)", command=self.auto_pair_and_plot)
+        pair_btn.pack(side="left", padx=5)
+        pair_sel_btn = ttk.Button(control_frame, text="Pair FW↔RV (selection)", command=self.auto_pair_selection_and_plot)
+        pair_sel_btn.pack(side="left", padx=5)
+        save_btn = ttk.Button(control_frame, text="Save Plot", command=self.save_current_plot)
+        save_btn.pack(side="left", padx=8)
+
+        # --- Axis controls row ---
+        axes_frame = ttk.Frame(parent)
+        axes_frame.pack(fill="x", padx=10, pady=6)
+        ttk.Label(axes_frame, text="Axes:").pack(side="left", padx=(0,6))
+        self.iv_xmin = tk.StringVar(); self.iv_xmax = tk.StringVar(); self.iv_ymin = tk.StringVar(); self.iv_ymax = tk.StringVar()
+        ttk.Label(axes_frame, text="V min").pack(side="left"); ttk.Entry(axes_frame, textvariable=self.iv_xmin, width=8).pack(side="left", padx=3)
+        ttk.Label(axes_frame, text="V max").pack(side="left"); ttk.Entry(axes_frame, textvariable=self.iv_xmax, width=8).pack(side="left", padx=8)
+        ttk.Label(axes_frame, text="I min").pack(side="left"); ttk.Entry(axes_frame, textvariable=self.iv_ymin, width=10).pack(side="left", padx=3)
+        ttk.Label(axes_frame, text="I max").pack(side="left"); ttk.Entry(axes_frame, textvariable=self.iv_ymax, width=10).pack(side="left", padx=8)
+        ttk.Button(axes_frame, text="Apply axes", command=self.apply_iv_axes).pack(side="left", padx=6)
+        ttk.Button(axes_frame, text="Autoscale", command=self.reset_iv_axes).pack(side="left", padx=2)
+
+        
+        # Sort controls
+        sort_frame = ttk.Frame(parent)
+        sort_frame.pack(fill="x", padx=10, pady=4)
+        ttk.Label(sort_frame, text="Sort selection list:").pack(side="left")
+        ttk.Button(sort_frame, text="Voc ↑", command=lambda: self.sort_iv_selection_by_voc(True)).pack(side="left", padx=4)
+        ttk.Button(sort_frame, text="Voc ↓", command=lambda: self.sort_iv_selection_by_voc(False)).pack(side="left", padx=4)
     
         self.plot_frame = ttk.Frame(parent)
         self.plot_frame.pack(fill="both", expand=True, padx=10, pady=10)
@@ -976,6 +1047,29 @@ class IVDataAnalyzer:
     def parse_iv_data_for_plot(self, filepath):
         with open(filepath, 'r') as f:
             content = f.read()
+
+        # Extract sweep metadata to compute scan speed (V/s)
+        vstart = self.extract_value(content, r'Vstart:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)')
+        vend = self.extract_value(content, r'Vend:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)')
+        npoints = None
+        m_np = re.search(r'Number of points:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)', content)
+        if m_np:
+            try:
+                npoints = int(float(m_np.group(1)))
+            except:
+                npoints = None
+        delay_s = self.extract_value(content, r'Delay \[s\]:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)')
+        it_s = self.extract_value(content, r'Integration time \[s\]:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)')
+        scan_speed = None
+        try:
+            if vstart is not None and vend is not None and npoints and npoints > 1 and (delay_s is not None) and (it_s is not None):
+                step_time = (delay_s + it_s)
+                total_time = (npoints - 1) * step_time
+                if total_time > 0:
+                    scan_speed = abs(vend - vstart) / total_time
+        except Exception:
+            scan_speed = None
+
     
         data_section = re.search(    r'% MEASURED IV FRLOOP DATA\s*\nV \(measured\) \[V\]\s+I \(measured\) \[A\].*?\n(.*)', content, re.DOTALL)
 
@@ -1011,6 +1105,476 @@ class IVDataAnalyzer:
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
+
+    def refresh_iv_selection(self):
+        """Fill the IV selection list from the first tab table, including conditions, respecting sort order."""
+        try:
+            if hasattr(self, 'iv_listbox'):
+                self.iv_listbox.delete(0, tk.END)
+                # Build condition map
+                cond_map = {}
+                try:
+                    if hasattr(self, 'conditions_data') and not self.conditions_data.empty:
+                        for _, r in self.conditions_data.iterrows():
+                            cond_map[str(r.get('Substrate ID',''))] = r.get('Condition','')
+                except Exception:
+                    cond_map = {}
+                if 'Filename' in self.measurements_data.columns:
+                    df = self.measurements_data.copy()
+                    df = self._apply_iv_sort(df)
+                    for _, row in df.iterrows():
+                        fn = row.get('Filename', '')
+                        subid = str(row.get('Substrate ID', ''))
+                        pix = row.get('Pixel', '')
+                        sd = row.get('Scan Direction', '')
+                        cond = cond_map.get(subid, '—')
+                        disp = f"{fn}  |  {subid}  |  Pixel {pix}  |  {sd}  |  {cond}"
+                        self.iv_listbox.insert(tk.END, disp)
+        except Exception:
+            pass
+
+
+    def load_iv_from_selection(self):
+        """Parse and plot IV curve(s) for the selected entries from the first tab."""
+        try:
+            indices = self.iv_listbox.curselection()
+        except Exception:
+            indices = []
+        if not indices:
+            messagebox.showinfo("Select file(s)", "Please choose one or more measurements from the list.")
+            return
+        
+        filepaths = []
+        for idx in indices:
+            sel = self.iv_listbox.get(idx)
+            filename = sel.split('  |')[0].strip()
+            if 'Filepath' in self.measurements_data.columns:
+                matches = self.measurements_data[self.measurements_data['Filename'] == filename]
+                if not matches.empty:
+                    fp = matches.iloc[0].get('Filepath', None)
+                    if fp: filepaths.append(fp)
+        if not filepaths:
+            messagebox.showerror("Not found", "Could not locate file paths for the selections.")
+            return
+        
+        curves = []
+        for fp in filepaths:
+            try:
+                df = self.parse_iv_data_for_plot(fp)
+                curves.append((fp, df))
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load {os.path.basename(fp)}: {e}")
+        if not curves:
+            return
+        self.plot_iv_curves_overlaid(curves)
+
+    def _split_fw_rv_if_present(self, df):
+        """Split a single IV sweep into FW/RV if a voltage direction reversal is found.
+        Returns a list of (label_suffix, sub_df). If no reversal, returns [("", df)]."""
+        v = df['Voltage (V)'].values
+        if len(v) < 3:
+            return [("", df)]
+        dir0 = 1 if v[1] >= v[0] else -1
+        change_idx = None
+        for i in range(2, len(v)):
+            d = 1 if v[i] >= v[i-1] else -1
+            if d != dir0:
+                change_idx = i-1
+                break
+        if change_idx is None:
+            return [("", df)]
+        df1 = df.iloc[:change_idx+1].reset_index(drop=True)
+        df2 = df.iloc[change_idx+1:].reset_index(drop=True)
+        # Label segments
+        lab1 = " (FW)" if df1['Voltage (V)'].iloc[-1] > df1['Voltage (V)'].iloc[0] else " (RV)"
+        lab2 = " (FW)" if df2['Voltage (V)'].iloc[-1] > df2['Voltage (V)'].iloc[0] else " (RV)"
+        return [(lab1, df1), (lab2, df2)]
+
+        def plot_iv_curves_overlaid(self, curves):
+            """Overlay arbitrary curves; if a single file contains FW+RV, use split; style as FW/RV with pairwise colors."""
+            for w in self.plot_frame.winfo_children():
+                w.destroy()
+            fig, ax = plt.subplots(figsize=(8, 6))
+
+            # Build condition map
+            cond_map = {}
+            try:
+                if hasattr(self, 'conditions_data') and not self.conditions_data.empty:
+                    for _, r in self.conditions_data.iterrows():
+                        cond_map[str(r.get('Substrate ID',''))] = r.get('Condition','')
+            except Exception:
+                cond_map = {}
+
+            import os
+            for i, (fp, df) in enumerate(curves):
+                parts = self._split_fw_rv_if_present(df)
+                subid = None
+                try:
+                    if 'Filepath' in self.measurements_data.columns:
+                        match = self.measurements_data[self.measurements_data['Filepath'] == fp]
+                        if not match.empty:
+                            subid = str(match.iloc[0].get('Substrate ID',''))
+                except Exception:
+                    subid = None
+                cond = cond_map.get(subid or '', '—')
+                c_fw, c_rv = self._pair_colors(i)
+                for suf, part in parts:
+                    # crude check for RV segment
+                    is_rv = ('RV' in suf) or ('rv' in suf)
+                    label = f"{subid or ''} | {cond} | {'RV' if is_rv else 'FW'}"
+                    if is_rv:
+                        ax.plot(part['Voltage (V)'], part['Current (A)'], linestyle='--', color=c_rv, alpha=0.5, label=label)
+                    else:
+                        ax.plot(part['Voltage (V)'], part['Current (A)'], linestyle='-', color=c_fw, label=label)
+
+            ax.set_title("IV Curves (overlay)")
+            ax.set_xlabel("Voltage (V)")
+            ax.set_ylabel("Current (A)")
+            ax.grid(True)
+            ax.legend()
+            canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+            canvas.draw()
+            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    def sort_iv_selection_by_voc(self, ascending=True):
+        """Sort the selection listbox by Voc [V]."""
+        try:
+            self._iv_sort_key = ('voc', ascending)
+        except Exception:
+            self._iv_sort_key = ('voc', ascending)
+        self.refresh_iv_selection()
+
+    def _apply_iv_sort(self, df):
+        """Internal: apply current sort to the measurements_data for the selection list."""
+        key = getattr(self, '_iv_sort_key', None)
+        if not key:
+            return df
+        kind, asc = key
+        try:
+            if kind == 'voc' and 'Voc [V]' in df.columns:
+                # Convert to numeric to be safe
+                dfx = df.copy()
+                dfx['__voc__'] = pd.to_numeric(dfx['Voc [V]'], errors='coerce')
+                dfx = dfx.sort_values(by='__voc__', ascending=asc, na_position='last')
+                return dfx
+        except Exception:
+            return df
+        return df
+
+        def _get_color_cycle(self):
+            import matplotlib.pyplot as plt
+            return plt.rcParams.get('axes.prop_cycle', None).by_key().get('color', ['C0','C1','C2','C3','C4','C5']) if plt.rcParams.get('axes.prop_cycle', None) else ['C0','C1','C2','C3','C4','C5']
+
+        def _pair_colors(self, idx):
+            colors = self._get_color_cycle()
+            base = colors[idx % len(colors)]
+            return base, base
+
+    def auto_pair_and_plot(self):
+        """Pair FW/RV across ALL loaded data and plot (FW solid, RV dashed; RV alpha=0.5)."""
+        needed = {'Substrate ID','Pixel','Scan Direction','Filepath','Filename'}
+        if not needed.issubset(set(self.measurements_data.columns)):
+            messagebox.showwarning("Missing info", "Required columns missing; please load files in the first tab.")
+            return
+
+        df = self.measurements_data.copy()
+        df['__dir__'] = df['Scan Direction'].astype(str).str.lower().replace({'fw':'fwd','forward':'fwd','rev':'rev','reverse':'rev'})
+
+        cond_map = {}
+        try:
+            if hasattr(self, 'conditions_data') and not self.conditions_data.empty:
+                for _, r in self.conditions_data.iterrows():
+                    cond_map[str(r.get('Substrate ID',''))] = r.get('Condition','')
+        except Exception:
+            cond_map = {}
+
+        pairs = []
+        for (subid, pix), g in df.groupby(['Substrate ID','Pixel']):
+            fwd_rows = g[g['__dir__']=='fwd']
+            rev_rows = g[g['__dir__']=='rev']
+            if not fwd_rows.empty and not rev_rows.empty:
+                pairs.append((fwd_rows.iloc[0], rev_rows.iloc[0]))
+            else:
+                def guess_dir(fn):
+                    s = str(fn).lower()
+                    if any(t in s for t in ['_fw','-fw',' fw','(fw)','_fwd','-fwd',' fwd']): return 'fwd'
+                    if any(t in s for t in ['_rv','-rv',' rv','(rv)','_rev','-rev',' rev']): return 'rev'
+                    return None
+                g2 = g.copy()
+                g2['__guess__'] = g2['Filename'].apply(guess_dir)
+                fwd_rows = g2[g2['__guess__']=='fwd']
+                rev_rows = g2[g2['__guess__']=='rev']
+                if not fwd_rows.empty and not rev_rows.empty:
+                    pairs.append((fwd_rows.iloc[0], rev_rows.iloc[0]))
+
+        if not pairs:
+            messagebox.showinfo("No pairs found", "No FW/RV pairs detected.")
+            return
+
+        for w in self.plot_frame.winfo_children():
+            w.destroy()
+        fig, ax = plt.subplots(figsize=(8, 6))
+        self._last_ax = ax
+        self._maybe_apply_axes(ax)
+
+        # Get color cycle
+        try:
+            colors = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
+        except Exception:
+            colors = []
+
+        for i, (fw_row, rv_row) in enumerate(pairs):
+            subid = str(fw_row['Substrate ID'])
+            cond = cond_map.get(subid, '—')
+            base_color = colors[i % len(colors)] if colors else None
+            # FWD
+            try:
+                df_fw = self.parse_iv_data_for_plot(fw_row['Filepath'])
+                ax.plot(df_fw['Voltage (V)'], df_fw['Current (A)'], linestyle='-', color=base_color, label=f"{subid} | {cond} | FW")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed FW: {e}")
+            # REV
+            try:
+                df_rv = self.parse_iv_data_for_plot(rv_row['Filepath'])
+                ax.plot(df_rv['Voltage (V)'], df_rv['Current (A)'], linestyle='--', color=base_color, alpha=0.5, label=f"{subid} | {cond} | RV")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed RV: {e}")
+
+        ax.set_title("IV Curves – Auto-paired FW/RV")
+        ax.set_xlabel("Voltage (V)")
+        ax.set_ylabel("Current (A)")
+        ax.grid(True)
+        ax.legend()
+        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+    def auto_pair_selection_and_plot(self):
+        """Pair FW/RV ONLY for selected items."""
+        needed = {'Substrate ID','Pixel','Scan Direction','Filepath','Filename'}
+        if not needed.issubset(set(self.measurements_data.columns)):
+            messagebox.showwarning("Missing info", "Required columns missing; please load files in the first tab.")
+            return
+
+        try:
+            indices = self.iv_listbox.curselection()
+        except Exception:
+            indices = []
+        if not indices:
+            messagebox.showinfo("Select file(s)", "Please select at least one measurement in the list.")
+            return
+
+        df = self.measurements_data.copy()
+        df['__dir__'] = df['Scan Direction'].astype(str).str.lower().replace({'fw':'fwd','forward':'fwd','rev':'rev','reverse':'rev'})
+
+        cond_map = {}
+        try:
+            if hasattr(self, 'conditions_data') and not self.conditions_data.empty:
+                for _, r in self.conditions_data.iterrows():
+                    cond_map[str(r.get('Substrate ID',''))] = r.get('Condition','')
+        except Exception:
+            cond_map = {}
+
+        def guess_dir(fn):
+            s = str(fn).lower()
+            if any(t in s for t in ['_fw','-fw',' fw','(fw)','_fwd','-fwd',' fwd']): return 'fwd'
+            if any(t in s for t in ['_rv','-rv',' rv','(rv)','_rev','-rev',' rev']): return 'rev'
+            return None
+
+        def rows_for(subid, pix, direction):
+            g = df[(df['Substrate ID']==subid) & (df['Pixel']==pix)]
+            g1 = g[g['__dir__']==direction]
+            if not g1.empty:
+                return g1
+            g2 = g.copy()
+            g2['__guess__'] = g2['Filename'].apply(guess_dir)
+            return g2[g2['__guess__']==direction]
+
+        selected_rows = []
+        for idx in indices:
+            disp = self.iv_listbox.get(idx)
+            fname = disp.split('  |')[0].strip()
+            r = df[df['Filename']==fname]
+            if not r.empty:
+                selected_rows.append(r.iloc[0])
+
+        pairs = []
+        for r in selected_rows:
+            subid, pix = r['Substrate ID'], r['Pixel']
+            d = r['__dir__']
+            if d not in ['fwd','rev']:
+                d = guess_dir(r['Filename']) or 'fwd'
+            other = 'rev' if d=='fwd' else 'fwd'
+            cand = rows_for(subid, pix, other)
+            if not cand.empty:
+                o = cand.iloc[0]
+                if d=='fwd':
+                    pairs.append((r, o))
+                else:
+                    pairs.append((o, r))
+
+        if not pairs:
+            messagebox.showinfo("No pairs found", "No FW/RV pairs found for the selection.")
+            return
+
+        for w in self.plot_frame.winfo_children():
+            w.destroy()
+        fig, ax = plt.subplots(figsize=(8, 6))
+        self._last_ax = ax
+        self._maybe_apply_axes(ax)
+
+        try:
+            colors = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
+        except Exception:
+            colors = []
+
+        for i, (fw_row, rv_row) in enumerate(pairs):
+            subid = str(fw_row['Substrate ID'])
+            cond = cond_map.get(subid, '—')
+            base_color = colors[i % len(colors)] if colors else None
+            try:
+                df_fw = self.parse_iv_data_for_plot(fw_row['Filepath'])
+                ax.plot(df_fw['Voltage (V)'], df_fw['Current (A)'], linestyle='-', color=base_color, label=f"{subid} | {cond} | FW")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed FW: {e}")
+            try:
+                df_rv = self.parse_iv_data_for_plot(rv_row['Filepath'])
+                ax.plot(df_rv['Voltage (V)'], df_rv['Current (A)'], linestyle='--', color=base_color, alpha=0.5, label=f"{subid} | {cond} | RV")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed RV: {e}")
+
+        ax.set_title("IV Curves – Auto-paired FW/RV (Selection)")
+        ax.set_xlabel("Voltage (V)")
+        ax.set_ylabel("Current (A)")
+        ax.grid(True)
+        ax.legend()
+        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+    def plot_iv_curves_overlaid(self, curves):
+        """Overlay arbitrary curves; if a single file contains FW+RV, split; FW solid, RV dashed, RV alpha=0.5."""
+        for w in self.plot_frame.winfo_children():
+            w.destroy()
+        fig, ax = plt.subplots(figsize=(8, 6))
+        self._last_ax = ax
+        self._maybe_apply_axes(ax)
+
+        # Build condition map
+        cond_map = {}
+        try:
+            if hasattr(self, 'conditions_data') and not self.conditions_data.empty:
+                for _, r in self.conditions_data.iterrows():
+                    cond_map[str(r.get('Substrate ID',''))] = r.get('Condition','')
+        except Exception:
+            cond_map = {}
+
+        import os
+        try:
+            colors = plt.rcParams['axes.prop_cycle'].by_key().get('color', [])
+        except Exception:
+            colors = []
+        for i, (fp, df) in enumerate(curves):
+            parts = self._split_fw_rv_if_present(df)
+            subid = None
+            try:
+                if 'Filepath' in self.measurements_data.columns:
+                    match = self.measurements_data[self.measurements_data['Filepath'] == fp]
+                    if not match.empty:
+                        subid = str(match.iloc[0].get('Substrate ID',''))
+            except Exception:
+                subid = None
+            cond = cond_map.get(subid or '', '—')
+            base_color = colors[i % len(colors)] if colors else None
+            for suf, part in parts:
+                is_rv = ('RV' in suf) or ('rv' in suf)
+                label = f"{subid or ''} | {cond} | {'RV' if is_rv else 'FW'}"
+                if is_rv:
+                    ax.plot(part['Voltage (V)'], part['Current (A)'], linestyle='--', color=base_color, alpha=0.5, label=label)
+                else:
+                    ax.plot(part['Voltage (V)'], part['Current (A)'], linestyle='-', color=base_color, label=label)
+
+        ax.set_title("IV Curves (overlay)")
+        ax.set_xlabel("Voltage (V)")
+        ax.set_ylabel("Current (A)")
+        ax.grid(True)
+        ax.legend()
+        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    def _maybe_apply_axes(self, ax):
+        try:
+            xmin = self.iv_xmin.get().strip() if hasattr(self, 'iv_xmin') else ''
+            xmax = self.iv_xmax.get().strip() if hasattr(self, 'iv_xmax') else ''
+            ymin = self.iv_ymin.get().strip() if hasattr(self, 'iv_ymin') else ''
+            ymax = self.iv_ymax.get().strip() if hasattr(self, 'iv_ymax') else ''
+        except Exception:
+            xmin = xmax = ymin = ymax = ''
+        def to_float(s):
+            try: return float(s)
+            except: return None
+        x0, x1 = to_float(xmin), to_float(xmax)
+        y0, y1 = to_float(ymin), to_float(ymax)
+        if x0 is not None or x1 is not None:
+            cur = list(ax.get_xlim())
+            if x0 is not None: cur[0] = x0
+            if x1 is not None: cur[1] = x1
+            ax.set_xlim(cur)
+        if y0 is not None or y1 is not None:
+            cur = list(ax.get_ylim())
+            if y0 is not None: cur[0] = y0
+            if y1 is not None: cur[1] = y1
+            ax.set_ylim(cur)
+
+    def apply_iv_axes(self):
+        try:
+            if hasattr(self, '_last_ax') and self._last_ax:
+                self._maybe_apply_axes(self._last_ax)
+                self._last_ax.figure.canvas.draw_idle()
+        except Exception:
+            pass
+
+    def reset_iv_axes(self):
+        try:
+            if hasattr(self, 'iv_xmin'): self.iv_xmin.set('')
+            if hasattr(self, 'iv_xmax'): self.iv_xmax.set('')
+            if hasattr(self, 'iv_ymin'): self.iv_ymin.set('')
+            if hasattr(self, 'iv_ymax'): self.iv_ymax.set('')
+        except Exception:
+            pass
+        try:
+            if hasattr(self, '_last_ax') and self._last_ax:
+                self._last_ax.relim(); self._last_ax.autoscale(); self._last_ax.figure.canvas.draw_idle()
+        except Exception:
+            pass
+
+
+    def save_current_plot(self):
+        """Save the current IV plot to PNG/SVG/PDF."""
+        try:
+            ax = getattr(self, '_last_ax', None)
+            fig = ax.figure if ax is not None else None
+        except Exception:
+            fig = None
+        if fig is None:
+            messagebox.showinfo("No plot", "There is no plot to save yet. Create a plot first.")
+            return
+        try:
+            fpath = filedialog.asksaveasfilename(
+                defaultextension=".png",
+                filetypes=[("PNG Image","*.png"), ("SVG Vector","*.svg"), ("PDF Document","*.pdf")],
+                initialfile="IV_plot.png",
+                title="Save IV Plot"
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not open Save dialog: {e}")
+            return
+        if not fpath:
+            return
+        try:
+            fig.savefig(fpath, dpi=300, bbox_inches="tight")
+            messagebox.showinfo("Saved", f"Plot saved to:\n{fpath}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save plot: {e}")
 
 if __name__ == "__main__":
     root = tk.Tk()
