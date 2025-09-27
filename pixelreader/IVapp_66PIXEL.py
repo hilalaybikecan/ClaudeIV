@@ -1142,7 +1142,33 @@ class JVApp(tk.Tk):
             messagebox.showinfo("Export", "No data to export."); return
         path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
         if not path: return
-        self.df_with_flags.to_csv(path, index=False); messagebox.showinfo("Export", f"Saved: {path}")
+
+        # Aggregate data by substrate and composition_index
+        df_to_export = self.df_with_flags.copy()
+
+        # Group by substrate and composition_index, then calculate means for numerical columns
+        numerical_cols = ["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"]
+        grouping_cols = ["substrate", "composition_index"]
+
+        # Calculate aggregated metrics
+        aggregated = df_to_export.groupby(grouping_cols)[numerical_cols].mean().reset_index()
+
+        # Also include group_index for consistency
+        aggregated["group_index"] = aggregated["composition_index"].apply(comp_to_group)
+
+        # Add Well column mapping substrate to letter and composition to number
+        aggregated["Well"] = aggregated.apply(lambda row: f"{chr(ord('A') + int(row['substrate']) - 1)}{int(row['composition_index'])}", axis=1)
+
+        # Add count of aggregated measurements for reference
+        counts = df_to_export.groupby(grouping_cols).size().reset_index(name='n_measurements')
+        aggregated = aggregated.merge(counts, on=grouping_cols, how='left')
+
+        # Reorder columns to match original table format
+        column_order = ["substrate", "composition_index", "group_index", "Well", "n_measurements"] + numerical_cols
+        aggregated = aggregated[column_order]
+
+        aggregated.to_csv(path, index=False)
+        messagebox.showinfo("Export", f"Aggregated data saved: {path}\n{len(aggregated)} composition groups exported")
 
     # -------------------- Metrics recompute --------------------
     def recompute_metrics(self):

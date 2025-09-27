@@ -35,6 +35,7 @@ class IVDataAnalyzer:
         
         # Store the current figure for saving
         self.current_figure = None
+        self.current_plot_data = None
         
         # Track sort state for measurements tree
         self.last_sorted_column = None
@@ -69,11 +70,11 @@ class IVDataAnalyzer:
         notebook.add(data_frame, text="Data Management")
     
         plot_frame = ttk.Frame(notebook)
-        notebook.add(plot_frame, text="Plotting")
+        notebook.add(plot_frame, text="Condition Plots")
     
         # New IV Plot tab
         iv_plot_frame = ttk.Frame(notebook)
-        notebook.add(iv_plot_frame, text="IV Plot")
+        notebook.add(iv_plot_frame, text="IV Plots")
     
         # Setup UI components
         self.setup_data_management(data_frame)
@@ -322,10 +323,13 @@ class IVDataAnalyzer:
         
         save_plot_button = ttk.Button(button_frame, text="Save Plot", command=self.save_plot)
         save_plot_button.pack(side="left", padx=5)
+
+        export_data_button = ttk.Button(button_frame, text="Export Data to Excel", command=self.export_condition_data)
+        export_data_button.pack(side="left", padx=5)
         
-        # Frame for the plot
-        self.plot_frame = ttk.Frame(parent)
-        self.plot_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        # Frame for the condition plot
+        self.condition_plot_frame = ttk.Frame(parent)
+        self.condition_plot_frame.pack(fill="both", expand=True, padx=10, pady=10)
     
     def save_conditions(self):
         """Save conditions data to a JSON file"""
@@ -898,7 +902,7 @@ class IVDataAnalyzer:
             return
         
         # Clear previous plot
-        for widget in self.plot_frame.winfo_children():
+        for widget in self.condition_plot_frame.winfo_children():
             widget.destroy()
         
         # Create figure
@@ -942,12 +946,13 @@ class IVDataAnalyzer:
         # Tight layout to ensure everything fits
         plt.tight_layout()
         
-        # Save the figure reference for later use
+        # Save the figure reference and plot data for later use
         self.current_figure = fig
         self.current_param = selected_param
+        self.current_plot_data = plot_data.copy()
         
         # Embed plot in tkinter
-        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas = FigureCanvasTkAgg(fig, master=self.condition_plot_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
     
@@ -978,7 +983,83 @@ class IVDataAnalyzer:
             messagebox.showinfo("Success", f"Plot saved successfully to:\n{file_path}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save plot: {str(e)}")
-            
+
+    def export_condition_data(self):
+        """Export the current condition plot data to Excel format"""
+        if self.current_plot_data is None or self.current_plot_data.empty:
+            messagebox.showwarning("Warning", "No plot data to export. Please generate a plot first.")
+            return
+
+        # Get the save file path
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[
+                ("Excel files", "*.xlsx"),
+                ("CSV files", "*.csv"),
+                ("All files", "*.*")
+            ],
+            title="Export Condition Data As"
+        )
+
+        if not file_path:
+            return  # User cancelled
+
+        try:
+            # Create a copy of the data for export
+            export_data = self.current_plot_data.copy()
+
+            # Get the condition order used in the plot
+            condition_order = self.get_condition_order(export_data)
+
+            # Sort data by condition order for better readability
+            export_data['Condition_Order'] = export_data['Condition'].map(
+                {cond: idx for idx, cond in enumerate(condition_order)}
+            )
+            export_data = export_data.sort_values(['Condition_Order', 'Substrate ID'])
+            export_data = export_data.drop('Condition_Order', axis=1)
+
+            # Select relevant columns for export (excluding internal columns)
+            columns_to_export = [
+                'Substrate ID', 'Condition', 'Pixel', 'Scan Direction',
+                'Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]',
+                'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]',
+                'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]'
+            ]
+
+            # Filter to only include columns that exist in the data
+            available_columns = [col for col in columns_to_export if col in export_data.columns]
+            export_data_filtered = export_data[available_columns]
+
+            # Export based on file extension
+            if file_path.lower().endswith('.csv'):
+                export_data_filtered.to_csv(file_path, index=False)
+            else:
+                # Default to Excel format (requires openpyxl: pip install openpyxl)
+                export_data_filtered.to_excel(file_path, index=False, sheet_name='Condition Data')
+
+            # Show success message with summary
+            total_measurements = len(export_data_filtered)
+            unique_conditions = export_data_filtered['Condition'].nunique()
+            messagebox.showinfo(
+                "Success",
+                f"Data exported successfully to:\n{file_path}\n\n"
+                f"Exported {total_measurements} measurements across {unique_conditions} conditions."
+            )
+
+        except ImportError as e:
+            if "openpyxl" in str(e).lower():
+                messagebox.showerror(
+                    "Missing Dependency",
+                    "Excel export requires the 'openpyxl' package.\n\n"
+                    "Please install it using:\n"
+                    "pip install openpyxl\n\n"
+                    "Alternatively, you can export as CSV format."
+                )
+            else:
+                messagebox.showerror("Import Error", f"Failed to export data: {str(e)}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export data: {str(e)}")
+
     def setup_iv_plot(self, parent):
         control_frame = ttk.Frame(parent)
         control_frame.pack(fill="x", padx=10, pady=5)
@@ -1025,9 +1106,9 @@ class IVDataAnalyzer:
         ttk.Label(sort_frame, text="Sort selection list:").pack(side="left")
         ttk.Button(sort_frame, text="Voc ↑", command=lambda: self.sort_iv_selection_by_voc(True)).pack(side="left", padx=4)
         ttk.Button(sort_frame, text="Voc ↓", command=lambda: self.sort_iv_selection_by_voc(False)).pack(side="left", padx=4)
-    
-        self.plot_frame = ttk.Frame(parent)
-        self.plot_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+        self.iv_plot_frame = ttk.Frame(parent)
+        self.iv_plot_frame.pack(fill="both", expand=True, padx=10, pady=10)
     
     def load_iv_data(self):
         file_path = filedialog.askopenfilename(filetypes=[("IV Files", "*.iv"), ("All Files", "*.*")])
@@ -1091,7 +1172,7 @@ class IVDataAnalyzer:
         return pd.DataFrame({'Voltage (V)': voltages, 'Current (A)': currents})
     
     def plot_iv_curve(self, data):
-        for widget in self.plot_frame.winfo_children():
+        for widget in self.iv_plot_frame.winfo_children():
             widget.destroy()
     
         fig, ax = plt.subplots(figsize=(8, 6))
@@ -1101,7 +1182,7 @@ class IVDataAnalyzer:
         ax.set_ylabel("Current (A)")
         ax.grid(True)
     
-        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
@@ -1192,7 +1273,7 @@ class IVDataAnalyzer:
 
         def plot_iv_curves_overlaid(self, curves):
             """Overlay arbitrary curves; if a single file contains FW+RV, use split; style as FW/RV with pairwise colors."""
-            for w in self.plot_frame.winfo_children():
+            for w in self.iv_plot_frame.winfo_children():
                 w.destroy()
             fig, ax = plt.subplots(figsize=(8, 6))
 
@@ -1232,7 +1313,7 @@ class IVDataAnalyzer:
             ax.set_ylabel("Current (A)")
             ax.grid(True)
             ax.legend()
-            canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+            canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
             canvas.draw()
             canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
@@ -1311,7 +1392,7 @@ class IVDataAnalyzer:
             messagebox.showinfo("No pairs found", "No FW/RV pairs detected.")
             return
 
-        for w in self.plot_frame.winfo_children():
+        for w in self.iv_plot_frame.winfo_children():
             w.destroy()
         fig, ax = plt.subplots(figsize=(8, 6))
         self._last_ax = ax
@@ -1345,7 +1426,7 @@ class IVDataAnalyzer:
         ax.set_ylabel("Current (A)")
         ax.grid(True)
         ax.legend()
-        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
     def auto_pair_selection_and_plot(self):
@@ -1416,7 +1497,7 @@ class IVDataAnalyzer:
             messagebox.showinfo("No pairs found", "No FW/RV pairs found for the selection.")
             return
 
-        for w in self.plot_frame.winfo_children():
+        for w in self.iv_plot_frame.winfo_children():
             w.destroy()
         fig, ax = plt.subplots(figsize=(8, 6))
         self._last_ax = ax
@@ -1447,12 +1528,12 @@ class IVDataAnalyzer:
         ax.set_ylabel("Current (A)")
         ax.grid(True)
         ax.legend()
-        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
     def plot_iv_curves_overlaid(self, curves):
         """Overlay arbitrary curves; if a single file contains FW+RV, split; FW solid, RV dashed, RV alpha=0.5."""
-        for w in self.plot_frame.winfo_children():
+        for w in self.iv_plot_frame.winfo_children():
             w.destroy()
         fig, ax = plt.subplots(figsize=(8, 6))
         self._last_ax = ax
@@ -1497,7 +1578,7 @@ class IVDataAnalyzer:
         ax.set_ylabel("Current (A)")
         ax.grid(True)
         ax.legend()
-        canvas = FigureCanvasTkAgg(fig, master=self.plot_frame)
+        canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
         canvas.draw()
         canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
