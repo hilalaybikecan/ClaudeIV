@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to ai agents when working with code in this directory.
 
 ## Project Overview
 
@@ -32,7 +32,7 @@ This is a Python-based IV (Current-Voltage) Data Analyzer application built with
 
 ### Running the Application
 ```bash
-python IVapp_v5.py
+python IVapp_malibu.py
 ```
 
 ### File Format Support
