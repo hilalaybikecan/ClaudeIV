@@ -2284,7 +2284,7 @@ class JVApp(tk.Tk):
                 if pair['forward'] is not None:
                     sweep = pair['forward']
                     if len(sweep.voltage) > 0 and len(sweep.current_A) > 0:
-                        current_density = sweep.current_A / sweep.area_cm2 * 1000  # mA/cm²
+                        current_density = sweep.current_A / sweep.area_cm2 * 1000 * 1.5  # mA/cm² (corrected)
                         label = f"S{substrate}-C{comp}P{pos} (F)"
                         self.jv_ax.plot(sweep.voltage, current_density, color=base_color, label=label, linewidth=2, alpha=1.0)
                 
@@ -2292,7 +2292,7 @@ class JVApp(tk.Tk):
                 if pair['reverse'] is not None:
                     sweep = pair['reverse']
                     if len(sweep.voltage) > 0 and len(sweep.current_A) > 0:
-                        current_density = sweep.current_A / sweep.area_cm2 * 1000  # mA/cm²
+                        current_density = sweep.current_A / sweep.area_cm2 * 1000 * 1.5  # mA/cm² (corrected)
                         label = f"S{substrate}-C{comp}P{pos} (R)"
                         self.jv_ax.plot(sweep.voltage, current_density, color=base_color, label=label, linewidth=2, linestyle="--", alpha=0.6)
                 
@@ -2301,7 +2301,7 @@ class JVApp(tk.Tk):
             # Plot all curves individually
             for i, sweep in enumerate(selected_sweeps):
                 if len(sweep.voltage) > 0 and len(sweep.current_A) > 0:
-                    current_density = sweep.current_A / sweep.area_cm2 * 1000  # mA/cm²
+                    current_density = sweep.current_A / sweep.area_cm2 * 1000 * 1.5  # mA/cm² (corrected)
                     color = colors[i % len(colors)]
                     linestyle = "--" if sweep.direction == "reverse" else "-"
                     alpha = 0.6 if sweep.direction == "reverse" else 1.0
