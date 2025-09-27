@@ -2316,9 +2316,6 @@ class JVApp(tk.Tk):
         self.jv_ax.grid(True, alpha=0.3)
         self.jv_ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
         
-        # Invert y-axis to show typical solar cell convention (negative current up)
-        self.jv_ax.invert_yaxis()
-        
         self.jv_fig.tight_layout()
         self.jv_canvas.draw()
         
