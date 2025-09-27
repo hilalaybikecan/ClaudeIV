@@ -2314,7 +2314,7 @@ class JVApp(tk.Tk):
         self.jv_ax.set_ylabel("Current Density (mA/cm²)")
         self.jv_ax.set_title("JV Curves")
         self.jv_ax.grid(True, alpha=0.3)
-        self.jv_ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        self.jv_ax.legend(loc='best')
         
         self.jv_fig.tight_layout()
         self.jv_canvas.draw()
