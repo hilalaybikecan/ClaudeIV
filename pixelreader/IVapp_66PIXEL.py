@@ -14,6 +14,7 @@ from tkinter import ttk, filedialog, messagebox
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+import matplotlib.pyplot as plt
 
 from mpl_toolkits.mplot3d import Axes3D
 
@@ -540,6 +541,7 @@ class JVApp(tk.Tk):
         self.include_forward = tk.BooleanVar(value=True)
         self.include_reverse = tk.BooleanVar(value=True)
         self.metric_choice = tk.StringVar(value="PCE_pct")
+        self.aggregation_method = tk.StringVar(value="mean")
         self.combine_substrates = tk.BooleanVar(value=True)
         self.combine_fr = tk.BooleanVar(value=True)
         self.grouping_mode = tk.StringVar(value="11 compositions")
@@ -605,8 +607,13 @@ class JVApp(tk.Tk):
         self.sweep_frame = ttk.Frame(self.notebook, padding=8)
         self.notebook.add(self.sweep_frame, text="Sweep Analysis")
         
+        # Tab 3: JV Curve visualization
+        self.jv_frame = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(self.jv_frame, text="JV Curves")
+        
         self._build_composition_tab()
         self._build_sweep_tab()
+        self._build_jv_tab()
         
     def _build_composition_tab(self):
         self.comp_frame.columnconfigure(0, weight=0); self.comp_frame.columnconfigure(1, weight=1)
@@ -636,21 +643,25 @@ class JVApp(tk.Tk):
         ttk.Label(side, text="Metric").grid(row=11, column=0, sticky="w")
         metric_cb = ttk.Combobox(side, textvariable=self.metric_choice, values=["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"], state="readonly", width=12)
         metric_cb.grid(row=12, column=0, sticky="ew"); metric_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+        
+        ttk.Label(side, text="Aggregation").grid(row=13, column=0, sticky="w", pady=(4, 0))
+        agg_cb = ttk.Combobox(side, textvariable=self.aggregation_method, values=["mean", "max"], state="readonly", width=12)
+        agg_cb.grid(row=14, column=0, sticky="ew"); agg_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
 
-        ttk.Separator(side).grid(row=13, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Substrate / Grouping").grid(row=14, column=0, sticky="w")
+        ttk.Separator(side).grid(row=15, column=0, sticky="ew", pady=6)
+        ttk.Label(side, text="Substrate / Grouping").grid(row=16, column=0, sticky="w")
         self.substrate_cb = ttk.Combobox(side, values=["All"], state="readonly")
-        self.substrate_cb.grid(row=15, column=0, sticky="ew", pady=2); self.substrate_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
-        ttk.Checkbutton(side, text="Combine substrates", variable=self.combine_substrates, command=self.refresh_plots).grid(row=16, column=0, sticky="w")
-        ttk.Checkbutton(side, text="Combine F & R", variable=self.combine_fr, command=self.refresh_plots).grid(row=17, column=0, sticky="w")
-        ttk.Label(side, text="Grouping").grid(row=18, column=0, sticky="w", pady=(6, 0))
+        self.substrate_cb.grid(row=17, column=0, sticky="ew", pady=2); self.substrate_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+        ttk.Checkbutton(side, text="Combine substrates", variable=self.combine_substrates, command=self.refresh_plots).grid(row=18, column=0, sticky="w")
+        ttk.Checkbutton(side, text="Combine F & R", variable=self.combine_fr, command=self.refresh_plots).grid(row=19, column=0, sticky="w")
+        ttk.Label(side, text="Grouping").grid(row=20, column=0, sticky="w", pady=(6, 0))
         grp_cb = ttk.Combobox(side, textvariable=self.grouping_mode, values=["11 compositions", "9 groups"], state="readonly", width=18)
-        grp_cb.grid(row=19, column=0, sticky="ew", pady=2); grp_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
-        ttk.Checkbutton(side, text="Expand x-axis by substrate", variable=self.expand_substrate_axis, command=self.refresh_plots).grid(row=20, column=0, sticky="w", pady=(2, 6))
+        grp_cb.grid(row=21, column=0, sticky="ew", pady=2); grp_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+        ttk.Checkbutton(side, text="Expand x-axis by substrate", variable=self.expand_substrate_axis, command=self.refresh_plots).grid(row=22, column=0, sticky="w", pady=(2, 6))
 
-        ttk.Separator(side).grid(row=21, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Thresholds").grid(row=22, column=0, sticky="w")
-        tfrm = ttk.Frame(side); tfrm.grid(row=23, column=0, sticky="ew")
+        ttk.Separator(side).grid(row=23, column=0, sticky="ew", pady=6)
+        ttk.Label(side, text="Thresholds").grid(row=24, column=0, sticky="w")
+        tfrm = ttk.Frame(side); tfrm.grid(row=25, column=0, sticky="ew")
         ttk.Label(tfrm, text="Min Voc (V):").grid(row=0, column=0, sticky="w"); ttk.Entry(tfrm, textvariable=self.min_voc, width=8).grid(row=0, column=1, sticky="w", padx=4)
         ttk.Label(tfrm, text="Max Voc (V):").grid(row=0, column=2, sticky="w"); ttk.Entry(tfrm, textvariable=self.max_voc, width=8).grid(row=0, column=3, sticky="w", padx=4)
         ttk.Label(tfrm, text="Min PCE (%):").grid(row=1, column=0, sticky="w"); ttk.Entry(tfrm, textvariable=self.min_pce, width=8).grid(row=1, column=1, sticky="w", padx=4)
@@ -1211,6 +1222,12 @@ class JVApp(tk.Tk):
 
     def refresh_plots(self):
         self.plot_boxplot_groups()
+        # Also refresh JV selection table when plots are refreshed
+        try:
+            self.refresh_jv_selection_table()
+        except AttributeError:
+            # JV tab not yet initialized
+            pass
 
     # -------------------- Plots --------------------
     def plot_boxplot_groups(self):
@@ -1226,12 +1243,18 @@ class JVApp(tk.Tk):
 
         data_df = df.copy()
         labels: List[str] = []; series: List[np.ndarray] = []
+        agg_method = self.aggregation_method.get()
 
         if self.expand_substrate_axis.get():
             subs = sorted(data_df["substrate"].dropna().astype(int).unique().tolist())
             for sub in subs:
                 sub_df = data_df[data_df["substrate"] == sub]
-                vals_by = sub_df.groupby(group_col)[metric].apply(lambda s: s.dropna().values)
+                if agg_method == "max":
+                    # For max: group by substrate+composition, take max, then collect those max values
+                    vals_by = sub_df.groupby([group_col, "substrate"])[metric].max().reset_index().groupby(group_col)[metric].apply(lambda s: s.dropna().values)
+                else:
+                    # For mean: show distribution of all individual measurements (current behavior)
+                    vals_by = sub_df.groupby(group_col)[metric].apply(lambda s: s.dropna().values)
                 for g in expected_groups:
                     vals = vals_by.get(g, np.array([]))
                     if len(vals) == 0: continue
@@ -1242,7 +1265,12 @@ class JVApp(tk.Tk):
             if sel and sel != "All" and not self.combine_substrates.get():
                 try: data_df = data_df[data_df["substrate"] == int(sel)]
                 except Exception: pass
-            vals_by = data_df.groupby(group_col)[metric].apply(lambda s: s.dropna().values)
+            if agg_method == "max":
+                # For max: group by substrate+composition, take max, then collect those max values
+                vals_by = data_df.groupby([group_col, "substrate"])[metric].max().reset_index().groupby(group_col)[metric].apply(lambda s: s.dropna().values)
+            else:
+                # For mean: show distribution of all individual measurements (current behavior)
+                vals_by = data_df.groupby(group_col)[metric].apply(lambda s: s.dropna().values)
             for g in expected_groups:
                 vals = vals_by.get(g, np.array([]))
                 if len(vals) == 0: continue
@@ -1256,7 +1284,7 @@ class JVApp(tk.Tk):
         self.ax.set_xticks(range(1, len(labels) + 1))
         self.ax.set_xticklabels(labels, rotation=45, ha="right")
         self.ax.set_ylabel(metric)
-        title = f"Boxplot: {metric} by {'Group' if use_groups else 'Composition'}"
+        title = f"Boxplot ({agg_method}): {metric} by {'Group' if use_groups else 'Composition'}"
         if self.expand_substrate_axis.get(): title += " (expanded by substrate)"
         self.ax.set_title(title)
         self.ax.grid(True, which="both", axis="y")
@@ -1272,7 +1300,7 @@ class JVApp(tk.Tk):
         group_col = "group_index" if use_groups else "composition_index"
         expected_groups = list(range(1, 10)) if use_groups else list(range(1, 12))
 
-        agg = "mean"  # (can switch to 'max' if you want later)
+        agg = self.aggregation_method.get()
 
         data_df = df.copy()
         grouped = (data_df.groupby(["substrate", group_col])[metric].max().reset_index()
@@ -1974,6 +2002,376 @@ class JVApp(tk.Tk):
         
         self.sweep_info_text.delete(1.0, tk.END)
         self.sweep_info_text.insert(tk.END, info_text)
+
+    def _build_jv_tab(self):
+        """Build the JV curve visualization tab"""
+        self.jv_frame.columnconfigure(0, weight=0); self.jv_frame.columnconfigure(1, weight=1)
+        self.jv_frame.rowconfigure(0, weight=1)
+
+        # Left panel: Sample selection and controls
+        jv_left = ttk.Frame(self.jv_frame, padding=8); jv_left.grid(row=0, column=0, sticky="ns")
+        
+        # Sample selection from main table
+        ttk.Label(jv_left, text="Sample Selection").grid(row=0, column=0, sticky="w")
+        ttk.Label(jv_left, text="Select samples from the table below:").grid(row=1, column=0, sticky="w", pady=(0, 4))
+        
+        # Mini table for sample selection
+        selection_frame = ttk.Frame(jv_left); selection_frame.grid(row=2, column=0, sticky="ew")
+        jv_left.columnconfigure(0, weight=1)
+        
+        # Table showing filtered data for selection (same format as main table)
+        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct")
+        self.jv_selection_tree = ttk.Treeview(selection_frame, columns=columns, show="headings", 
+                                             selectmode="extended", height=8)
+        # Initialize sorting state
+        self._jv_sort_column = None
+        self._jv_sort_reverse = False
+        
+        for c in columns:
+            self.jv_selection_tree.heading(c, text=c, command=lambda col=c: self.sort_jv_by_column(col))
+            self.jv_selection_tree.column(c, width=90, stretch=True)
+        
+        # Scrollbars for selection table
+        jv_vsb = ttk.Scrollbar(selection_frame, orient="vertical", command=self.jv_selection_tree.yview)
+        jv_hsb = ttk.Scrollbar(selection_frame, orient="horizontal", command=self.jv_selection_tree.xview)
+        self.jv_selection_tree.configure(yscrollcommand=jv_vsb.set, xscrollcommand=jv_hsb.set)
+        
+        self.jv_selection_tree.grid(row=0, column=0, sticky="nsew")
+        jv_vsb.grid(row=0, column=1, sticky="ns")
+        jv_hsb.grid(row=1, column=0, sticky="ew")
+        selection_frame.rowconfigure(0, weight=1)
+        selection_frame.columnconfigure(0, weight=1)
+        
+        # Plot controls
+        ttk.Separator(jv_left).grid(row=3, column=0, sticky="ew", pady=8)
+        ttk.Label(jv_left, text="Plot Controls").grid(row=4, column=0, sticky="w")
+        
+        # Grouping option
+        self.jv_group_by_direction = tk.BooleanVar(value=True)
+        ttk.Checkbutton(jv_left, text="Group by F/R direction", 
+                       variable=self.jv_group_by_direction,
+                       command=self.plot_jv_curves).grid(row=5, column=0, sticky="w", pady=2)
+        
+        # Axis adjustment controls
+        ttk.Separator(jv_left).grid(row=6, column=0, sticky="ew", pady=8)
+        ttk.Label(jv_left, text="Plot Axes:").grid(row=7, column=0, sticky="w")
+        
+        # X-axis controls
+        x_frame = ttk.Frame(jv_left); x_frame.grid(row=8, column=0, sticky="ew", pady=2)
+        ttk.Label(x_frame, text="X-axis:").grid(row=0, column=0, sticky="w")
+        self.jv_x_auto = tk.BooleanVar(value=True)
+        ttk.Checkbutton(x_frame, text="Auto", variable=self.jv_x_auto).grid(row=0, column=1, sticky="w")
+        
+        x_limit_frame = ttk.Frame(jv_left); x_limit_frame.grid(row=9, column=0, sticky="ew")
+        ttk.Label(x_limit_frame, text="Min:").grid(row=0, column=0, sticky="w")
+        self.jv_x_min = tk.StringVar(value="")
+        ttk.Entry(x_limit_frame, textvariable=self.jv_x_min, width=8).grid(row=0, column=1, sticky="w", padx=2)
+        ttk.Label(x_limit_frame, text="Max:").grid(row=0, column=2, sticky="w")
+        self.jv_x_max = tk.StringVar(value="")
+        ttk.Entry(x_limit_frame, textvariable=self.jv_x_max, width=8).grid(row=0, column=3, sticky="w", padx=2)
+        
+        # Y-axis controls
+        y_frame = ttk.Frame(jv_left); y_frame.grid(row=10, column=0, sticky="ew", pady=2)
+        ttk.Label(y_frame, text="Y-axis:").grid(row=0, column=0, sticky="w")
+        self.jv_y_auto = tk.BooleanVar(value=True)
+        ttk.Checkbutton(y_frame, text="Auto", variable=self.jv_y_auto).grid(row=0, column=1, sticky="w")
+        
+        y_limit_frame = ttk.Frame(jv_left); y_limit_frame.grid(row=11, column=0, sticky="ew")
+        ttk.Label(y_limit_frame, text="Min:").grid(row=0, column=0, sticky="w")
+        self.jv_y_min = tk.StringVar(value="")
+        ttk.Entry(y_limit_frame, textvariable=self.jv_y_min, width=8).grid(row=0, column=1, sticky="w", padx=2)
+        ttk.Label(y_limit_frame, text="Max:").grid(row=0, column=2, sticky="w")
+        self.jv_y_max = tk.StringVar(value="")
+        ttk.Entry(y_limit_frame, textvariable=self.jv_y_max, width=8).grid(row=0, column=3, sticky="w", padx=2)
+        
+        # Apply axes button
+        ttk.Button(jv_left, text="Apply Axes", 
+                  command=self.update_jv_axes).grid(row=12, column=0, sticky="ew", pady=2)
+        
+        # Plot button
+        ttk.Button(jv_left, text="Plot Selected JV Curves", 
+                  command=self.plot_jv_curves).grid(row=13, column=0, sticky="ew", pady=8)
+        
+        # Clear button
+        ttk.Button(jv_left, text="Clear Plot", 
+                  command=self.clear_jv_plot).grid(row=14, column=0, sticky="ew")
+        
+        # Right panel: JV curve plot
+        jv_right = ttk.Frame(self.jv_frame, padding=8); jv_right.grid(row=0, column=1, sticky="nsew")
+        jv_right.rowconfigure(0, weight=1); jv_right.columnconfigure(0, weight=1)
+        
+        # JV plot figure and canvas
+        self.jv_fig = Figure(figsize=(8, 6), dpi=100)
+        self.jv_ax = self.jv_fig.add_subplot(111)
+        self.jv_canvas = FigureCanvasTkAgg(self.jv_fig, master=jv_right)
+        self.jv_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+        
+        # Initialize plot
+        self.clear_jv_plot()
+        
+    def refresh_jv_selection_table(self):
+        """Refresh the JV selection table with current filtered data (same format as main table)"""
+        # Clear existing items
+        for item in self.jv_selection_tree.get_children():
+            self.jv_selection_tree.delete(item)
+        
+        if self.df_with_flags is None or self.df_with_flags.empty:
+            return
+            
+        # Get filtered data
+        filtered_df = self._filtered_df()
+        if filtered_df.empty:
+            return
+        
+        # Add rows to selection table (exact same format as main table)
+        for idx, r in filtered_df.iterrows():
+            vals = (
+                int(r["substrate"]) if pd.notna(r["substrate"]) else "",
+                int(r["pixel_id"]) if pd.notna(r["pixel_id"]) else "",
+                int(r["composition_index"]) if pd.notna(r["composition_index"]) else "",
+                int(r["group_index"]) if pd.notna(r["group_index"]) else "",
+                int(r["position_in_composition"]) if pd.notna(r["position_in_composition"]) else "",
+                r["direction"],
+                None if pd.isna(r["Voc"]) else round(float(r["Voc"]), 3),
+                None if pd.isna(r["Jsc_mAcm2"]) else round(float(r["Jsc_mAcm2"]), 2),
+                None if pd.isna(r["FF_pct"]) else round(float(r["FF_pct"]), 1),
+                None if pd.isna(r["PCE_pct"]) else round(float(r["PCE_pct"]), 2),
+            )
+            # Use dataframe index as item identifier for lookup
+            self.jv_selection_tree.insert("", "end", iid=str(idx), values=vals)
+    
+    def sort_jv_by_column(self, column: str):
+        """Sort JV selection table by clicked column, keeping F/R pairs together"""
+        if self.df_with_flags is None or self.df_with_flags.empty:
+            return
+            
+        # Toggle sort direction if same column, otherwise ascending
+        if self._jv_sort_column == column:
+            self._jv_sort_reverse = not self._jv_sort_reverse
+        else:
+            self._jv_sort_column = column
+            self._jv_sort_reverse = False
+            
+        # Map display column names to dataframe column names
+        column_map = {
+            "substrate": "substrate",
+            "pixel_id": "pixel_id", 
+            "comp": "composition_index",
+            "group": "group_index",
+            "pos": "position_in_composition",
+            "dir": "direction",
+            "Voc": "Voc",
+            "Jsc_mAcm2": "Jsc_mAcm2",
+            "FF_pct": "FF_pct",
+            "PCE_pct": "PCE_pct"
+        }
+        
+        if column in column_map:
+            # Get filtered data to sort
+            filtered_df = self._filtered_df().copy()
+            if filtered_df.empty:
+                return
+                
+            df_col = column_map[column]
+            
+            # Sort by main column first, then by grouping fields to keep F/R pairs together
+            sort_columns = [df_col, "substrate", "pixel_id", "composition_index", "position_in_composition", "direction"]
+            sort_ascending = [not self._jv_sort_reverse, True, True, True, True, True]  # forward before reverse
+            
+            try:
+                sorted_df = filtered_df.sort_values(by=sort_columns, ascending=sort_ascending, na_position='last')
+                
+                # Clear and repopulate JV table with sorted data
+                for item in self.jv_selection_tree.get_children():
+                    self.jv_selection_tree.delete(item)
+                
+                for idx, r in sorted_df.iterrows():
+                    vals = (
+                        int(r["substrate"]) if pd.notna(r["substrate"]) else "",
+                        int(r["pixel_id"]) if pd.notna(r["pixel_id"]) else "",
+                        int(r["composition_index"]) if pd.notna(r["composition_index"]) else "",
+                        int(r["group_index"]) if pd.notna(r["group_index"]) else "",
+                        int(r["position_in_composition"]) if pd.notna(r["position_in_composition"]) else "",
+                        r["direction"],
+                        None if pd.isna(r["Voc"]) else round(float(r["Voc"]), 3),
+                        None if pd.isna(r["Jsc_mAcm2"]) else round(float(r["Jsc_mAcm2"]), 2),
+                        None if pd.isna(r["FF_pct"]) else round(float(r["FF_pct"]), 1),
+                        None if pd.isna(r["PCE_pct"]) else round(float(r["PCE_pct"]), 2),
+                    )
+                    self.jv_selection_tree.insert("", "end", iid=str(idx), values=vals)
+                
+                # Update column headers to show sort direction
+                for col in ["substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"]:
+                    if col == column:
+                        arrow = " ↓" if self._jv_sort_reverse else " ↑"
+                        self.jv_selection_tree.heading(col, text=f"{col}{arrow}")
+                    else:
+                        self.jv_selection_tree.heading(col, text=col)
+                        
+            except Exception as e:
+                print(f"Sorting error: {e}")
+                # Fall back to refreshing the table normally
+                self.refresh_jv_selection_table()
+    
+    def plot_jv_curves(self):
+        """Plot JV curves for selected samples"""
+        selected_items = self.jv_selection_tree.selection()
+        if not selected_items:
+            self.clear_jv_plot()
+            return
+        
+        # Clear the plot
+        self.jv_ax.clear()
+        
+        # Get the original filtered dataframe
+        filtered_df = self._filtered_df()
+        if filtered_df.empty:
+            self.clear_jv_plot()
+            return
+        
+        # Collect selected sweeps
+        selected_sweeps = []
+        for item in selected_items:
+            values = self.jv_selection_tree.item(item)["values"]
+            if len(values) >= 6:
+                # Find matching sweep in data (updated for new table format)
+                substrate = int(values[0])
+                pixel_id = int(values[1])
+                comp = int(values[2])
+                # group = int(values[3])  # Skip group column
+                pos = int(values[4])
+                direction = values[5]
+                
+                # Find the corresponding JVSweep object
+                for sweep in self.data:
+                    if (sweep.substrate == substrate and 
+                        sweep.pixel_id == pixel_id and
+                        sweep.composition_index == comp and 
+                        sweep.position_in_composition == pos and
+                        sweep.direction == direction):
+                        selected_sweeps.append(sweep)
+                        break
+        
+        if not selected_sweeps:
+            self.clear_jv_plot()
+            return
+        
+        # Color schemes
+        colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(selected_sweeps))))
+        direction_colors = {"forward": "blue", "reverse": "red"}
+        
+        # Group by direction if requested
+        if self.jv_group_by_direction.get():
+            forward_sweeps = [s for s in selected_sweeps if s.direction == "forward"]
+            reverse_sweeps = [s for s in selected_sweeps if s.direction == "reverse"]
+            
+            # Plot F/R pairs together with same colors
+            unique_samples = {}
+            # First, group by sample identity
+            for sweep in selected_sweeps:
+                sample_key = (sweep.substrate, sweep.composition_index, sweep.position_in_composition)
+                if sample_key not in unique_samples:
+                    unique_samples[sample_key] = {'forward': None, 'reverse': None}
+                unique_samples[sample_key][sweep.direction] = sweep
+            
+            # Plot each sample's F/R pair with same color
+            color_idx = 0
+            for sample_key, pair in unique_samples.items():
+                substrate, comp, pos = sample_key
+                base_color = colors[color_idx % len(colors)]
+                
+                # Plot forward if available
+                if pair['forward'] is not None:
+                    sweep = pair['forward']
+                    if len(sweep.voltage) > 0 and len(sweep.current_A) > 0:
+                        current_density = sweep.current_A / sweep.area_cm2 * 1000  # mA/cm²
+                        label = f"S{substrate}-C{comp}P{pos} (F)"
+                        self.jv_ax.plot(sweep.voltage, current_density, color=base_color, label=label, linewidth=2, alpha=1.0)
+                
+                # Plot reverse if available (same color, dashed, alpha 0.6)
+                if pair['reverse'] is not None:
+                    sweep = pair['reverse']
+                    if len(sweep.voltage) > 0 and len(sweep.current_A) > 0:
+                        current_density = sweep.current_A / sweep.area_cm2 * 1000  # mA/cm²
+                        label = f"S{substrate}-C{comp}P{pos} (R)"
+                        self.jv_ax.plot(sweep.voltage, current_density, color=base_color, label=label, linewidth=2, linestyle="--", alpha=0.6)
+                
+                color_idx += 1
+        else:
+            # Plot all curves individually
+            for i, sweep in enumerate(selected_sweeps):
+                if len(sweep.voltage) > 0 and len(sweep.current_A) > 0:
+                    current_density = sweep.current_A / sweep.area_cm2 * 1000  # mA/cm²
+                    color = colors[i % len(colors)]
+                    linestyle = "--" if sweep.direction == "reverse" else "-"
+                    alpha = 0.6 if sweep.direction == "reverse" else 1.0
+                    label = f"S{sweep.substrate}-C{sweep.composition_index}P{sweep.position_in_composition} ({sweep.direction[0].upper()})"
+                    self.jv_ax.plot(sweep.voltage, current_density, color=color, label=label, 
+                                   linewidth=2, linestyle=linestyle, alpha=alpha)
+        
+        # Formatting
+        self.jv_ax.set_xlabel("Voltage (V)")
+        self.jv_ax.set_ylabel("Current Density (mA/cm²)")
+        self.jv_ax.set_title("JV Curves")
+        self.jv_ax.grid(True, alpha=0.3)
+        self.jv_ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+        
+        # Invert y-axis to show typical solar cell convention (negative current up)
+        self.jv_ax.invert_yaxis()
+        
+        self.jv_fig.tight_layout()
+        self.jv_canvas.draw()
+        
+        # Apply custom axis limits if not in auto mode
+        self.update_jv_axes()
+    
+    def clear_jv_plot(self):
+        """Clear the JV plot"""
+        self.jv_ax.clear()
+        self.jv_ax.set_xlabel("Voltage (V)")
+        self.jv_ax.set_ylabel("Current Density (mA/cm²)")
+        self.jv_ax.set_title("JV Curves - Select samples to plot")
+        self.jv_ax.grid(True, alpha=0.3)
+        self.jv_canvas.draw()
+    
+    def update_jv_axes(self):
+        """Update JV plot axes based on user controls"""
+        if not hasattr(self, 'jv_ax'):
+            return
+            
+        # Helper function to parse axis limits
+        def parse_limit(value_str):
+            try:
+                if value_str and value_str.strip():
+                    return float(value_str.strip())
+                return None
+            except (ValueError, AttributeError):
+                return None
+        
+        try:
+            # Update X-axis
+            if not self.jv_x_auto.get():
+                x_min = parse_limit(self.jv_x_min.get())
+                x_max = parse_limit(self.jv_x_max.get())
+                if x_min is not None or x_max is not None:
+                    current_xlim = self.jv_ax.get_xlim()
+                    new_xlim = (x_min if x_min is not None else current_xlim[0],
+                               x_max if x_max is not None else current_xlim[1])
+                    self.jv_ax.set_xlim(new_xlim)
+            
+            # Update Y-axis
+            if not self.jv_y_auto.get():
+                y_min = parse_limit(self.jv_y_min.get())
+                y_max = parse_limit(self.jv_y_max.get())
+                if y_min is not None or y_max is not None:
+                    current_ylim = self.jv_ax.get_ylim()
+                    new_ylim = (y_min if y_min is not None else current_ylim[0],
+                               y_max if y_max is not None else current_ylim[1])
+                    self.jv_ax.set_ylim(new_ylim)
+            
+            self.jv_canvas.draw()
+        except Exception as e:
+            print(f"Error updating axes: {e}")
 
 if __name__ == "__main__":
     app = JVApp()
