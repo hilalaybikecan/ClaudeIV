@@ -219,13 +219,13 @@ def compute_metrics(voltage: np.ndarray, current_A: np.ndarray, area_cm2: float,
         FF = (abs(Vmpp) * abs(Jmpp_Acm2)) / (abs(Voc) * abs(Jsc_Acm2))
         FF_pct = 100.0 * FF
 
-    # PCE (%) = Pout_mpp / Pin × 100
+    # PCE (%) = Pout_mpp / Pin × 100 × 1.5 (sun intensity correction)
     PCE_pct = None
     if light_mw_cm2 > 0:
-        PCE_pct = (Pmpp_out / light_mw_cm2) * 100.0
+        PCE_pct = (Pmpp_out / light_mw_cm2) * 100.0 * 1.5
 
-    # Report Jsc as positive mA/cm²
-    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3
+    # Report Jsc as positive mA/cm² × 1.5 (sun intensity correction)
+    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3 * 1.5
 
     return Voc, Jsc_mAcm2, FF_pct, PCE_pct
 
@@ -546,14 +546,14 @@ class JVApp(tk.Tk):
         self.expand_substrate_axis = tk.BooleanVar(value=True)
 
         # Filters
-        self.min_voc = tk.DoubleVar(value="")
-        self.max_voc = tk.DoubleVar(value="")
-        self.min_pce = tk.DoubleVar(value="")
-        self.max_pce = tk.DoubleVar(value="")
-        self.min_jsc = tk.DoubleVar(value="")
-        self.max_jsc = tk.DoubleVar(value="")
-        self.min_ff  = tk.DoubleVar(value="")
-        self.max_ff  = tk.DoubleVar(value="")
+        self.min_voc = tk.StringVar(value="")
+        self.max_voc = tk.StringVar(value="")
+        self.min_pce = tk.StringVar(value="")
+        self.max_pce = tk.StringVar(value="")
+        self.min_jsc = tk.StringVar(value="")
+        self.max_jsc = tk.StringVar(value="")
+        self.min_ff  = tk.StringVar(value="")
+        self.max_ff  = tk.StringVar(value="")
 
         # Header regex (restored)
         self.header_pattern_var = tk.StringVar(value=DEFAULT_HEADER_REGEX)
@@ -871,6 +871,7 @@ class JVApp(tk.Tk):
         self.df = self._to_dataframe(all_sweeps)
         self.df["group_index"] = self.df["composition_index"].apply(comp_to_group)
         self.df_with_flags = self.df.copy()
+        self.df_with_flags["include"] = True  # Initialize all rows as included
 
         self._populate_substrate_combo()
         self.refresh_table(); self.refresh_plots()
@@ -1159,6 +1160,7 @@ class JVApp(tk.Tk):
         self.df = pd.DataFrame(rows)
         self.df["group_index"] = self.df["composition_index"].apply(comp_to_group)
         self.df_with_flags = self.df.copy()
+        self.df_with_flags["include"] = True  # Initialize all rows as included
         self._populate_substrate_combo()
         self.refresh_table(); self.refresh_plots()
 
@@ -1174,7 +1176,12 @@ class JVApp(tk.Tk):
 
     def _filtered_df(self) -> pd.DataFrame:
         if self.df_with_flags is None: return pd.DataFrame()
-        df = self.df_with_flags.copy()  # All rows are now valid since we delete instead of mark
+        df = self.df_with_flags.copy()
+        
+        # Apply threshold filtering using "include" column
+        if "include" in df.columns:
+            df = df[df["include"]]
+        
         # Handle F/R toggles only when not combining
         if not self.combine_fr.get():
             keep = []
@@ -1398,6 +1405,7 @@ class JVApp(tk.Tk):
                 self.df = self._to_dataframe(self.data)
                 self.df["group_index"] = self.df["composition_index"].apply(comp_to_group)
                 self.df_with_flags = self.df.copy()
+                self.df_with_flags["include"] = True  # Initialize all rows as included
                 self.refresh_table()
                 self.refresh_sweep_info()
                 self.refresh_sweep_plots()
