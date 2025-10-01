@@ -938,7 +938,7 @@ class IVDataAnalyzer:
         ax.set_ylabel(selected_param, fontsize=14)
         
         # Add horizontal grid lines only
-        ax.grid(True, axis='y', alpha=0.5, linestyle='--')
+        ax.grid(True, axis='y', alpha=0.4, linestyle='--')
         
         # Rotate x-axis labels for better readability
         plt.xticks(rotation=90, fontsize=15)
@@ -1061,60 +1061,107 @@ class IVDataAnalyzer:
             messagebox.showerror("Error", f"Failed to export data: {str(e)}")
 
     def setup_iv_plot(self, parent):
-        control_frame = ttk.Frame(parent)
-        control_frame.pack(fill="x", padx=10, pady=5)
-    
-        browse_button = ttk.Button(control_frame, text="Load IV File", command=self.load_iv_data)
-        browse_button.pack(side="left", padx=5, pady=5)
+        # Create main container with two columns
+        main_container = ttk.Frame(parent)
+        main_container.pack(fill="both", expand=True, padx=10, pady=5)
 
-        ttk.Label(control_frame, text=" or select from loaded measurements:").pack(side="left", padx=6)
-        list_frame = ttk.Frame(control_frame)
-        list_frame.pack(side="left", padx=5)
-        self.iv_listbox = tk.Listbox(list_frame, selectmode=tk.EXTENDED, height=12, width=90)
+        # Left side - Controls (takes up about 60% of width)
+        left_frame = ttk.Frame(main_container)
+        left_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
+
+        # Right side - Plot area (fixed square size)
+        right_frame = ttk.Frame(main_container)
+        right_frame.pack(side="right", fill="y", padx=(5, 0))
+
+        # === LEFT SIDE CONTROLS ===
+
+        # File controls
+        control_frame = ttk.LabelFrame(left_frame, text="File Controls")
+        control_frame.pack(fill="x", pady=(0, 5))
+
+        button_row1 = ttk.Frame(control_frame)
+        button_row1.pack(fill="x", padx=5, pady=5)
+
+        browse_button = ttk.Button(button_row1, text="Load IV File", command=self.load_iv_data)
+        browse_button.pack(side="left", padx=(0, 5))
+
+        select_btn = ttk.Button(button_row1, text="Plot Selected", command=self.load_iv_from_selection)
+        select_btn.pack(side="left", padx=5)
+
+        save_btn = ttk.Button(button_row1, text="Save Plot", command=self.save_current_plot)
+        save_btn.pack(side="left", padx=5)
+
+        button_row2 = ttk.Frame(control_frame)
+        button_row2.pack(fill="x", padx=5, pady=(0, 5))
+
+        pair_btn = ttk.Button(button_row2, text="Pair FW↔RV (auto)", command=self.auto_pair_and_plot)
+        pair_btn.pack(side="left", padx=(0, 5))
+
+        pair_sel_btn = ttk.Button(button_row2, text="Pair FW↔RV (selection)", command=self.auto_pair_selection_and_plot)
+        pair_sel_btn.pack(side="left", padx=5)
+
+        # Selection list
+        selection_frame = ttk.LabelFrame(left_frame, text="Measurement Selection")
+        selection_frame.pack(fill="both", expand=True, pady=(0, 5))
+
+        ttk.Label(selection_frame, text="Select from loaded measurements:").pack(anchor="w", padx=5, pady=(5, 2))
+
+        list_frame = ttk.Frame(selection_frame)
+        list_frame.pack(fill="both", expand=True, padx=5, pady=(0, 5))
+
+        self.iv_listbox = tk.Listbox(list_frame, selectmode=tk.EXTENDED, height=8)
         vsb = ttk.Scrollbar(list_frame, orient="vertical", command=self.iv_listbox.yview)
         self.iv_listbox.configure(yscrollcommand=vsb.set)
         self.refresh_iv_selection()
-        self.iv_listbox.grid(row=0, column=0, sticky="nsew")
-        vsb.grid(row=0, column=1, sticky="ns")
-        list_frame.columnconfigure(0, weight=1)
-        list_frame.rowconfigure(0, weight=1)
-        select_btn = ttk.Button(control_frame, text="Plot Selected", command=self.load_iv_from_selection)
-        select_btn.pack(side="left", padx=5)
-        pair_btn = ttk.Button(control_frame, text="Pair FW↔RV (auto)", command=self.auto_pair_and_plot)
-        pair_btn.pack(side="left", padx=5)
-        pair_sel_btn = ttk.Button(control_frame, text="Pair FW↔RV (selection)", command=self.auto_pair_selection_and_plot)
-        pair_sel_btn.pack(side="left", padx=5)
-        save_btn = ttk.Button(control_frame, text="Save Plot", command=self.save_current_plot)
-        save_btn.pack(side="left", padx=8)
+        self.iv_listbox.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
 
-        # --- Axis controls row ---
-        axes_frame = ttk.Frame(parent)
-        axes_frame.pack(fill="x", padx=10, pady=6)
-        ttk.Label(axes_frame, text="Axes:").pack(side="left", padx=(0,6))
-        self.iv_xmin = tk.StringVar(); self.iv_xmax = tk.StringVar(); self.iv_ymin = tk.StringVar(); self.iv_ymax = tk.StringVar()
-        ttk.Label(axes_frame, text="V min").pack(side="left"); ttk.Entry(axes_frame, textvariable=self.iv_xmin, width=8).pack(side="left", padx=3)
-        ttk.Label(axes_frame, text="V max").pack(side="left"); ttk.Entry(axes_frame, textvariable=self.iv_xmax, width=8).pack(side="left", padx=8)
-        ttk.Label(axes_frame, text="I min").pack(side="left"); ttk.Entry(axes_frame, textvariable=self.iv_ymin, width=10).pack(side="left", padx=3)
-        ttk.Label(axes_frame, text="I max").pack(side="left"); ttk.Entry(axes_frame, textvariable=self.iv_ymax, width=10).pack(side="left", padx=8)
-
-        # Area control for current density conversion
-        ttk.Label(axes_frame, text="Area [cm²]").pack(side="left", padx=(15,3))
-        self.iv_area = tk.StringVar(value="0.04")
-        ttk.Entry(axes_frame, textvariable=self.iv_area, width=8).pack(side="left", padx=3)
-
-        ttk.Button(axes_frame, text="Apply axes", command=self.apply_iv_axes).pack(side="left", padx=6)
-        ttk.Button(axes_frame, text="Autoscale", command=self.reset_iv_axes).pack(side="left", padx=2)
-
-        
         # Sort controls
-        sort_frame = ttk.Frame(parent)
-        sort_frame.pack(fill="x", padx=10, pady=4)
-        ttk.Label(sort_frame, text="Sort selection list:").pack(side="left")
-        ttk.Button(sort_frame, text="Voc ↑", command=lambda: self.sort_iv_selection_by_voc(True)).pack(side="left", padx=4)
-        ttk.Button(sort_frame, text="Voc ↓", command=lambda: self.sort_iv_selection_by_voc(False)).pack(side="left", padx=4)
+        sort_frame = ttk.Frame(selection_frame)
+        sort_frame.pack(fill="x", padx=5, pady=(0, 5))
+        ttk.Label(sort_frame, text="Sort:").pack(side="left", padx=(0, 5))
+        ttk.Button(sort_frame, text="Voc ↑", command=lambda: self.sort_iv_selection_by_voc(True)).pack(side="left", padx=2)
+        ttk.Button(sort_frame, text="Voc ↓", command=lambda: self.sort_iv_selection_by_voc(False)).pack(side="left", padx=2)
 
-        self.iv_plot_frame = ttk.Frame(parent)
-        self.iv_plot_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        # Axis controls
+        axes_frame = ttk.LabelFrame(left_frame, text="Plot Controls")
+        axes_frame.pack(fill="x", pady=(0, 5))
+
+        axes_row1 = ttk.Frame(axes_frame)
+        axes_row1.pack(fill="x", padx=5, pady=5)
+        ttk.Label(axes_row1, text="Voltage:").pack(side="left", padx=(0, 5))
+        self.iv_xmin = tk.StringVar(); self.iv_xmax = tk.StringVar()
+        ttk.Label(axes_row1, text="Min").pack(side="left"); ttk.Entry(axes_row1, textvariable=self.iv_xmin, width=8).pack(side="left", padx=3)
+        ttk.Label(axes_row1, text="Max").pack(side="left"); ttk.Entry(axes_row1, textvariable=self.iv_xmax, width=8).pack(side="left", padx=3)
+
+        axes_row2 = ttk.Frame(axes_frame)
+        axes_row2.pack(fill="x", padx=5, pady=(0, 5))
+        ttk.Label(axes_row2, text="Current:").pack(side="left", padx=(0, 5))
+        self.iv_ymin = tk.StringVar(); self.iv_ymax = tk.StringVar()
+        ttk.Label(axes_row2, text="Min").pack(side="left"); ttk.Entry(axes_row2, textvariable=self.iv_ymin, width=10).pack(side="left", padx=3)
+        ttk.Label(axes_row2, text="Max").pack(side="left"); ttk.Entry(axes_row2, textvariable=self.iv_ymax, width=10).pack(side="left", padx=3)
+
+        axes_row3 = ttk.Frame(axes_frame)
+        axes_row3.pack(fill="x", padx=5, pady=(0, 5))
+        ttk.Label(axes_row3, text="Area [cm²]:").pack(side="left", padx=(0, 5))
+        self.iv_area = tk.StringVar(value="0.04")
+        ttk.Entry(axes_row3, textvariable=self.iv_area, width=8).pack(side="left", padx=3)
+
+        ttk.Button(axes_row3, text="Apply", command=self.apply_iv_axes).pack(side="left", padx=(10, 5))
+        ttk.Button(axes_row3, text="Autoscale", command=self.reset_iv_axes).pack(side="left", padx=2)
+
+        # === RIGHT SIDE PLOT ===
+
+        # Create a fixed-size frame for the plot (square)
+        plot_container = ttk.LabelFrame(right_frame, text="IV Plot")
+        plot_container.pack(fill="both", expand=True)
+
+        # Create plot frame with fixed dimensions to maintain square aspect
+        self.iv_plot_frame = ttk.Frame(plot_container)
+        self.iv_plot_frame.pack(padx=10, pady=10)
+
+        # Set a minimum size for the plot container to keep it reasonably sized
+        plot_container.configure(width=500, height=500)
     
     def load_iv_data(self):
         file_path = filedialog.askopenfilename(filetypes=[("IV Files", "*.iv"), ("All Files", "*.*")])
@@ -1192,18 +1239,19 @@ class IVDataAnalyzer:
         for widget in self.iv_plot_frame.winfo_children():
             widget.destroy()
 
-        fig, ax = plt.subplots(figsize=(7, 6))
+        fig, ax = plt.subplots(figsize=(6, 6))
         # Convert current to current density
         current_density = self.convert_to_current_density(data['Current (A)'])
         ax.plot(data['Voltage (V)'], current_density, marker='o', linestyle='-')
         ax.set_title("IV Curve")
         ax.set_xlabel("Voltage (V)", fontsize=12)
         ax.set_ylabel("Current Density (mA/cm²)", fontsize=12)
-        ax.grid(True)
-    
+        ax.grid(True, alpha=0.4)
+        plt.tight_layout()
+
         canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        canvas.get_tk_widget().pack()
 
 
     def refresh_iv_selection(self):
@@ -1413,7 +1461,7 @@ class IVDataAnalyzer:
 
         for w in self.iv_plot_frame.winfo_children():
             w.destroy()
-        fig, ax = plt.subplots(figsize=(7, 6))
+        fig, ax = plt.subplots(figsize=(6, 6))
         self._last_ax = ax
         self._maybe_apply_axes(ax)
 
@@ -1442,14 +1490,15 @@ class IVDataAnalyzer:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed RV: {e}")
 
-        ax.set_title("IV Curves – Auto-paired FW/RV")
+        ax.set_title("IV Curves")
         ax.set_xlabel("Voltage (V)", fontsize=12)
         ax.set_ylabel("Current Density (mA/cm²)", fontsize=12)
-        ax.grid(True)
+        ax.grid(True, alpha=0.4)
         ax.legend()
+        plt.tight_layout()
         canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        canvas.get_tk_widget().pack()
     def auto_pair_selection_and_plot(self):
         """Pair FW/RV ONLY for selected items."""
         needed = {'Substrate ID','Pixel','Scan Direction','Filepath','Filename'}
@@ -1520,7 +1569,7 @@ class IVDataAnalyzer:
 
         for w in self.iv_plot_frame.winfo_children():
             w.destroy()
-        fig, ax = plt.subplots(figsize=(7, 6))
+        fig, ax = plt.subplots(figsize=(6, 6))
         self._last_ax = ax
         self._maybe_apply_axes(ax)
 
@@ -1546,19 +1595,20 @@ class IVDataAnalyzer:
             except Exception as e:
                 messagebox.showerror("Error", f"Failed RV: {e}")
 
-        ax.set_title("IV Curves – Auto-paired FW/RV (Selection)")
+        ax.set_title("IV Curves")
         ax.set_xlabel("Voltage (V)", fontsize=12)
         ax.set_ylabel("Current Density (mA/cm²)", fontsize=12)
-        ax.grid(True)
+        ax.grid(True,alpha=0.4)
         ax.legend()
+        plt.tight_layout()
         canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        canvas.get_tk_widget().pack()
     def plot_iv_curves_overlaid(self, curves):
         """Overlay arbitrary curves; if a single file contains FW+RV, split; FW solid, RV dashed, RV alpha=0.5."""
         for w in self.iv_plot_frame.winfo_children():
             w.destroy()
-        fig, ax = plt.subplots(figsize=(7, 6))
+        fig, ax = plt.subplots(figsize=(6, 6))
         self._last_ax = ax
         self._maybe_apply_axes(ax)
 
@@ -1600,11 +1650,12 @@ class IVDataAnalyzer:
         ax.set_title("IV Curves (overlay)")
         ax.set_xlabel("Voltage (V)", fontsize=12)
         ax.set_ylabel("Current Density (mA/cm²)", fontsize=12)
-        ax.grid(True)
+        ax.grid(True, alpha=0.4)
         ax.legend()
+        plt.tight_layout()
         canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
         canvas.draw()
-        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        canvas.get_tk_widget().pack()
 
     def _maybe_apply_axes(self, ax):
         try:
