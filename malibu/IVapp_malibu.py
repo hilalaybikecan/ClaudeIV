@@ -463,7 +463,7 @@ class IVDataAnalyzer:
 
         
         # Extract substrate ID
-        substrate_id_match = re.search(r'Deposition ID:\s*([A-Za-z0-9]+)', content)
+        substrate_id_match = re.search(r'Deposition ID:\s*([A-Za-z0-9_]+)', content)
         substrate_id = substrate_id_match.group(1) if substrate_id_match else 'Unknown'
         
         # Extract measurement data
@@ -906,7 +906,7 @@ class IVDataAnalyzer:
             widget.destroy()
         
         # Create figure
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(8, 6))
         
         # Get the desired condition order
         condition_order = self.get_condition_order(plot_data)
@@ -935,7 +935,7 @@ class IVDataAnalyzer:
         
         ax.set_title(f'{selected_param} by Condition')
         ax.set_xlabel('Condition')
-        ax.set_ylabel(selected_param)
+        ax.set_ylabel(selected_param, fontsize=14)
         
         # Add horizontal grid lines only
         ax.grid(True, axis='y', alpha=0.5, linestyle='--')
@@ -1096,6 +1096,12 @@ class IVDataAnalyzer:
         ttk.Label(axes_frame, text="V max").pack(side="left"); ttk.Entry(axes_frame, textvariable=self.iv_xmax, width=8).pack(side="left", padx=8)
         ttk.Label(axes_frame, text="I min").pack(side="left"); ttk.Entry(axes_frame, textvariable=self.iv_ymin, width=10).pack(side="left", padx=3)
         ttk.Label(axes_frame, text="I max").pack(side="left"); ttk.Entry(axes_frame, textvariable=self.iv_ymax, width=10).pack(side="left", padx=8)
+
+        # Area control for current density conversion
+        ttk.Label(axes_frame, text="Area [cm²]").pack(side="left", padx=(15,3))
+        self.iv_area = tk.StringVar(value="0.04")
+        ttk.Entry(axes_frame, textvariable=self.iv_area, width=8).pack(side="left", padx=3)
+
         ttk.Button(axes_frame, text="Apply axes", command=self.apply_iv_axes).pack(side="left", padx=6)
         ttk.Button(axes_frame, text="Autoscale", command=self.reset_iv_axes).pack(side="left", padx=2)
 
@@ -1170,16 +1176,29 @@ class IVDataAnalyzer:
                     continue
     
         return pd.DataFrame({'Voltage (V)': voltages, 'Current (A)': currents})
+
+    def convert_to_current_density(self, current_data):
+        """Convert current (A) to current density (mA/cm²) using the area from UI"""
+        try:
+            area_cm2 = float(self.iv_area.get())
+            if area_cm2 <= 0:
+                return current_data  # Return original if invalid area
+            # Convert A to mA/cm²: (A * 1000 mA/A) / (area in cm²)
+            return current_data * 1000 / area_cm2
+        except (ValueError, AttributeError):
+            return current_data  # Return original if area parsing fails
     
     def plot_iv_curve(self, data):
         for widget in self.iv_plot_frame.winfo_children():
             widget.destroy()
-    
-        fig, ax = plt.subplots(figsize=(8, 6))
-        ax.plot(data['Voltage (V)'], data['Current (A)'], marker='o', linestyle='-')
+
+        fig, ax = plt.subplots(figsize=(7, 6))
+        # Convert current to current density
+        current_density = self.convert_to_current_density(data['Current (A)'])
+        ax.plot(data['Voltage (V)'], current_density, marker='o', linestyle='-')
         ax.set_title("IV Curve")
-        ax.set_xlabel("Voltage (V)")
-        ax.set_ylabel("Current (A)")
+        ax.set_xlabel("Voltage (V)", fontsize=12)
+        ax.set_ylabel("Current Density (mA/cm²)", fontsize=12)
         ax.grid(True)
     
         canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
@@ -1394,7 +1413,7 @@ class IVDataAnalyzer:
 
         for w in self.iv_plot_frame.winfo_children():
             w.destroy()
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(7, 6))
         self._last_ax = ax
         self._maybe_apply_axes(ax)
 
@@ -1411,19 +1430,21 @@ class IVDataAnalyzer:
             # FWD
             try:
                 df_fw = self.parse_iv_data_for_plot(fw_row['Filepath'])
-                ax.plot(df_fw['Voltage (V)'], df_fw['Current (A)'], linestyle='-', color=base_color, label=f"{subid} | {cond} | FW")
+                current_density_fw = self.convert_to_current_density(df_fw['Current (A)'])
+                ax.plot(df_fw['Voltage (V)'], current_density_fw, linestyle='-', color=base_color, label=f"{subid} | {cond} | FW")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed FW: {e}")
             # REV
             try:
                 df_rv = self.parse_iv_data_for_plot(rv_row['Filepath'])
-                ax.plot(df_rv['Voltage (V)'], df_rv['Current (A)'], linestyle='--', color=base_color, alpha=0.5, label=f"{subid} | {cond} | RV")
+                current_density_rv = self.convert_to_current_density(df_rv['Current (A)'])
+                ax.plot(df_rv['Voltage (V)'], current_density_rv, linestyle='--', color=base_color, alpha=0.5, label=f"{subid} | {cond} | RV")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed RV: {e}")
 
         ax.set_title("IV Curves – Auto-paired FW/RV")
-        ax.set_xlabel("Voltage (V)")
-        ax.set_ylabel("Current (A)")
+        ax.set_xlabel("Voltage (V)", fontsize=12)
+        ax.set_ylabel("Current Density (mA/cm²)", fontsize=12)
         ax.grid(True)
         ax.legend()
         canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
@@ -1499,7 +1520,7 @@ class IVDataAnalyzer:
 
         for w in self.iv_plot_frame.winfo_children():
             w.destroy()
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(7, 6))
         self._last_ax = ax
         self._maybe_apply_axes(ax)
 
@@ -1514,18 +1535,20 @@ class IVDataAnalyzer:
             base_color = colors[i % len(colors)] if colors else None
             try:
                 df_fw = self.parse_iv_data_for_plot(fw_row['Filepath'])
-                ax.plot(df_fw['Voltage (V)'], df_fw['Current (A)'], linestyle='-', color=base_color, label=f"{subid} | {cond} | FW")
+                current_density_fw = self.convert_to_current_density(df_fw['Current (A)'])
+                ax.plot(df_fw['Voltage (V)'], current_density_fw, linestyle='-', color=base_color, label=f"{subid} | {cond} | FW")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed FW: {e}")
             try:
                 df_rv = self.parse_iv_data_for_plot(rv_row['Filepath'])
-                ax.plot(df_rv['Voltage (V)'], df_rv['Current (A)'], linestyle='--', color=base_color, alpha=0.5, label=f"{subid} | {cond} | RV")
+                current_density_rv = self.convert_to_current_density(df_rv['Current (A)'])
+                ax.plot(df_rv['Voltage (V)'], current_density_rv, linestyle='--', color=base_color, alpha=0.5, label=f"{subid} | {cond} | RV")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed RV: {e}")
 
         ax.set_title("IV Curves – Auto-paired FW/RV (Selection)")
-        ax.set_xlabel("Voltage (V)")
-        ax.set_ylabel("Current (A)")
+        ax.set_xlabel("Voltage (V)", fontsize=12)
+        ax.set_ylabel("Current Density (mA/cm²)", fontsize=12)
         ax.grid(True)
         ax.legend()
         canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)
@@ -1535,7 +1558,7 @@ class IVDataAnalyzer:
         """Overlay arbitrary curves; if a single file contains FW+RV, split; FW solid, RV dashed, RV alpha=0.5."""
         for w in self.iv_plot_frame.winfo_children():
             w.destroy()
-        fig, ax = plt.subplots(figsize=(8, 6))
+        fig, ax = plt.subplots(figsize=(7, 6))
         self._last_ax = ax
         self._maybe_apply_axes(ax)
 
@@ -1568,14 +1591,15 @@ class IVDataAnalyzer:
             for suf, part in parts:
                 is_rv = ('RV' in suf) or ('rv' in suf)
                 label = f"{subid or ''} | {cond} | {'RV' if is_rv else 'FW'}"
+                current_density = self.convert_to_current_density(part['Current (A)'])
                 if is_rv:
-                    ax.plot(part['Voltage (V)'], part['Current (A)'], linestyle='--', color=base_color, alpha=0.5, label=label)
+                    ax.plot(part['Voltage (V)'], current_density, linestyle='--', color=base_color, alpha=0.5, label=label)
                 else:
-                    ax.plot(part['Voltage (V)'], part['Current (A)'], linestyle='-', color=base_color, label=label)
+                    ax.plot(part['Voltage (V)'], current_density, linestyle='-', color=base_color, label=label)
 
         ax.set_title("IV Curves (overlay)")
-        ax.set_xlabel("Voltage (V)")
-        ax.set_ylabel("Current (A)")
+        ax.set_xlabel("Voltage (V)", fontsize=12)
+        ax.set_ylabel("Current Density (mA/cm²)", fontsize=12)
         ax.grid(True)
         ax.legend()
         canvas = FigureCanvasTkAgg(fig, master=self.iv_plot_frame)

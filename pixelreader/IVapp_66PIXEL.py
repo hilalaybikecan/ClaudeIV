@@ -220,13 +220,13 @@ def compute_metrics(voltage: np.ndarray, current_A: np.ndarray, area_cm2: float,
         FF = (abs(Vmpp) * abs(Jmpp_Acm2)) / (abs(Voc) * abs(Jsc_Acm2))
         FF_pct = 100.0 * FF
 
-    # PCE (%) = Pout_mpp / Pin × 100 × 1.4 (sun intensity correction)
+    # PCE (%) = Pout_mpp / Pin × 100 × 1.3 (sun intensity correction)
     PCE_pct = None
     if light_mw_cm2 > 0:
-        PCE_pct = (Pmpp_out / light_mw_cm2) * 100.0 * 1.4
+        PCE_pct = (Pmpp_out / light_mw_cm2) * 100.0 * 1.3
 
-    # Report Jsc as positive mA/cm² × 1.4 (sun intensity correction)
-    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3 * 1.4
+    # Report Jsc as positive mA/cm² × 1.3 (sun intensity correction)
+    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3 * 1.3
 
     return Voc, Jsc_mAcm2, FF_pct, PCE_pct
 
@@ -541,7 +541,7 @@ class JVApp(tk.Tk):
         self.include_forward = tk.BooleanVar(value=True)
         self.include_reverse = tk.BooleanVar(value=True)
         self.metric_choice = tk.StringVar(value="PCE_pct")
-        self.aggregation_method = tk.StringVar(value="mean")
+        self.aggregation_method = tk.StringVar(value="max")
         self.combine_substrates = tk.BooleanVar(value=True)
         self.combine_fr = tk.BooleanVar(value=True)
         self.grouping_mode = tk.StringVar(value="11 compositions")
@@ -588,6 +588,8 @@ class JVApp(tk.Tk):
         self.sweep_ax = self.sweep_fig.add_subplot(111)
         self.sweep_cbar = None
 
+        # Performance analysis matplotlib
+
         self._build_ui()
 
     # -------------------- UI layout --------------------
@@ -610,7 +612,7 @@ class JVApp(tk.Tk):
         # Tab 3: JV Curve visualization
         self.jv_frame = ttk.Frame(self.notebook, padding=8)
         self.notebook.add(self.jv_frame, text="JV Curves")
-        
+
         self._build_composition_tab()
         self._build_sweep_tab()
         self._build_jv_tab()
@@ -714,100 +716,83 @@ class JVApp(tk.Tk):
         ttk.Button(plot_btns, text="Save plot as image", command=self.save_plot_image).grid(row=0, column=3, padx=4)
         
     def _build_sweep_tab(self):
-        """Build the sweep-based analysis tab"""
+        """Build the parameter vs performance analysis tab"""
         self.sweep_frame.columnconfigure(0, weight=0); self.sweep_frame.columnconfigure(1, weight=1)
         self.sweep_frame.rowconfigure(0, weight=1)
-        
+
         # Left side controls
         sweep_side = ttk.Frame(self.sweep_frame, padding=8); sweep_side.grid(row=0, column=0, sticky="ns")
-        
+
         # Excel file selection
-        ttk.Label(sweep_side, text="Experimental Conditions").grid(row=0, column=0, sticky="w")
+        ttk.Label(sweep_side, text="Parameter Data", font=("Arial", 10, "bold")).grid(row=0, column=0, sticky="w")
         excel_frame = ttk.Frame(sweep_side); excel_frame.grid(row=1, column=0, sticky="ew", pady=2)
-        ttk.Entry(excel_frame, textvariable=self.excel_path_var, width=25).grid(row=0, column=0, sticky="ew")
-        ttk.Button(excel_frame, text="Browse", command=self.browse_excel_file).grid(row=0, column=1, padx=(2, 0))
-        ttk.Button(sweep_side, text="Load conditions", command=self.load_conditions).grid(row=2, column=0, sticky="ew", pady=2)
-        
+        self.param_excel_path = tk.StringVar(value="")
+        ttk.Entry(excel_frame, textvariable=self.param_excel_path, width=25).grid(row=0, column=0, sticky="ew")
+        ttk.Button(excel_frame, text="Browse", command=self.browse_parameter_file).grid(row=0, column=1, padx=(2, 0))
+        ttk.Button(sweep_side, text="Load Excel Data", command=self.load_parameter_data).grid(row=2, column=0, sticky="ew", pady=2)
+
         ttk.Separator(sweep_side).grid(row=3, column=0, sticky="ew", pady=6)
-        
-        # Sweep selection
-        ttk.Label(sweep_side, text="Select Sweep").grid(row=4, column=0, sticky="w")
-        self.sweep_selection_var = tk.StringVar(value="All Sweeps")
-        self.sweep_selection_cb = ttk.Combobox(sweep_side, textvariable=self.sweep_selection_var, 
-                                             state="readonly", width=30)
-        self.sweep_selection_cb.grid(row=5, column=0, sticky="ew", pady=2)
-        self.sweep_selection_cb.bind("<<ComboboxSelected>>", self.on_sweep_selection_changed)
-        
-        ttk.Separator(sweep_side).grid(row=6, column=0, sticky="ew", pady=6)
-        
-        # Sweep analysis options
-        ttk.Label(sweep_side, text="Plot Options").grid(row=7, column=0, sticky="w")
-        self.sweep_metric = tk.StringVar(value="PCE_pct")
-        sweep_metric_cb = ttk.Combobox(sweep_side, textvariable=self.sweep_metric, 
-                                     values=["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"], 
-                                     state="readonly", width=15)
-        sweep_metric_cb.grid(row=8, column=0, sticky="ew", pady=2)
-        sweep_metric_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_sweep_plots())
-        
-        self.sweep_plot_type = tk.StringVar(value="auto")
-        ttk.Label(sweep_side, text="Plot Type").grid(row=9, column=0, sticky="w", pady=(6, 0))
-        plot_type_cb = ttk.Combobox(sweep_side, textvariable=self.sweep_plot_type,
-                                  values=["auto", "1D_line", "2D_scatter", "3D_surface", "boxplot"], 
-                                  state="readonly", width=15)
-        plot_type_cb.grid(row=10, column=0, sticky="ew", pady=2)
-        plot_type_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_sweep_plots())
-        
-        self.sweep_combine_directions = tk.BooleanVar(value=True)
-        ttk.Checkbutton(sweep_side, text="Combine F & R", 
-                       variable=self.sweep_combine_directions, 
-                       command=self.refresh_sweep_plots).grid(row=11, column=0, sticky="w", pady=2)
-        
-        ttk.Separator(sweep_side).grid(row=12, column=0, sticky="ew", pady=6)
-        ttk.Button(sweep_side, text="Refresh plot", command=self.refresh_sweep_plots).grid(row=13, column=0, sticky="ew")
-        
-        # Parameter analysis info
-        ttk.Label(sweep_side, text="Selected Sweep Info").grid(row=14, column=0, sticky="w", pady=(10, 2))
-        self.sweep_info_text = tk.Text(sweep_side, height=4, width=30, wrap=tk.WORD)
-        self.sweep_info_text.grid(row=15, column=0, sticky="ew", pady=2)
-        sweep_info_scroll = ttk.Scrollbar(sweep_side, command=self.sweep_info_text.yview)
-        self.sweep_info_text.config(yscrollcommand=sweep_info_scroll.set)
-        
-        # Right panel for sweep analysis
+
+        # Parameter analysis controls
+        ttk.Label(sweep_side, text="Analysis Options", font=("Arial", 10, "bold")).grid(row=4, column=0, sticky="w")
+
+        # X-axis parameter selection
+        ttk.Label(sweep_side, text="X-axis Parameter:").grid(row=5, column=0, sticky="w", pady=(5, 0))
+        self.x_param_var = tk.StringVar(value="")
+        self.x_param_cb = ttk.Combobox(sweep_side, textvariable=self.x_param_var,
+                                       state="readonly", width=30)
+        self.x_param_cb.grid(row=6, column=0, sticky="ew", pady=2)
+        self.x_param_cb.bind("<<ComboboxSelected>>", self.update_parameter_plot)
+
+        # Y-axis parameter selection (flexible - can be any parameter or performance metric)
+        ttk.Label(sweep_side, text="Y-axis Parameter:").grid(row=7, column=0, sticky="w", pady=(5, 0))
+        self.y_param_var = tk.StringVar(value="PCE_pct")
+        self.y_param_cb = ttk.Combobox(sweep_side, textvariable=self.y_param_var,
+                                       state="readonly", width=30)
+        self.y_param_cb.grid(row=8, column=0, sticky="ew", pady=2)
+        self.y_param_cb.bind("<<ComboboxSelected>>", self.update_parameter_plot)
+
+        # Optional second parameter for 2D plots
+        ttk.Label(sweep_side, text="Color Parameter (optional):").grid(row=9, column=0, sticky="w", pady=(5, 0))
+        self.color_param_var = tk.StringVar(value="None")
+        self.color_param_cb = ttk.Combobox(sweep_side, textvariable=self.color_param_var,
+                                           state="readonly", width=30)
+        self.color_param_cb.grid(row=10, column=0, sticky="ew", pady=2)
+        self.color_param_cb.bind("<<ComboboxSelected>>", self.update_parameter_plot)
+
+        # Plot type selection (enhanced with performance plotting options)
+        ttk.Label(sweep_side, text="Plot Type:").grid(row=11, column=0, sticky="w", pady=(5, 0))
+        self.plot_type_var = tk.StringVar(value="scatter")
+        plot_type_cb = ttk.Combobox(sweep_side, textvariable=self.plot_type_var,
+                                    values=["scatter", "bubble", "line", "heatmap", "surface", "violin", "box", "parallel_coords"],
+                                    state="readonly", width=20)
+        plot_type_cb.grid(row=12, column=0, sticky="ew", pady=2)
+        plot_type_cb.bind("<<ComboboxSelected>>", self.update_parameter_plot)
+
+        ttk.Separator(sweep_side).grid(row=13, column=0, sticky="ew", pady=6)
+
+        # Plot control buttons
+        ttk.Button(sweep_side, text="Update Plot", command=self.update_parameter_plot).grid(row=14, column=0, sticky="ew", pady=2)
+        ttk.Button(sweep_side, text="Save Plot", command=self.save_parameter_plot).grid(row=15, column=0, sticky="ew", pady=2)
+
+        # Data info
+        ttk.Label(sweep_side, text="Data Info", font=("Arial", 10, "bold")).grid(row=16, column=0, sticky="w", pady=(10, 2))
+        self.param_info_text = tk.Text(sweep_side, height=6, width=30, wrap=tk.WORD)
+        self.param_info_text.grid(row=17, column=0, sticky="ew", pady=2)
+        param_info_scroll = ttk.Scrollbar(sweep_side, command=self.param_info_text.yview)
+        self.param_info_text.config(yscrollcommand=param_info_scroll.set)
+
+        # Right panel for parameter analysis
         sweep_right = ttk.Frame(self.sweep_frame, padding=8); sweep_right.grid(row=0, column=1, sticky="nsew")
-        sweep_right.rowconfigure(0, weight=1); sweep_right.rowconfigure(1, weight=1); sweep_right.columnconfigure(0, weight=1)
-        
-        # Plot canvas for sweep analysis
+        sweep_right.rowconfigure(0, weight=1); sweep_right.columnconfigure(0, weight=1)
+
+        # Plot canvas for parameter analysis
         self.sweep_canvas = FigureCanvasTkAgg(self.sweep_fig, master=sweep_right)
         self.sweep_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
-        
-        # Info table for sweep conditions
-        info_frame = ttk.Frame(sweep_right); info_frame.grid(row=1, column=0, sticky="nsew", pady=(10, 0))
-        info_frame.rowconfigure(0, weight=1); info_frame.columnconfigure(0, weight=1)
-        
-        ttk.Label(info_frame, text="Sweep Conditions Summary").grid(row=0, column=0, sticky="w")
-        
-        # Treeview for sweep conditions
-        sweep_columns = ("sweep_id", "substrate_count", "condition_name")
-        self.sweep_tree = ttk.Treeview(info_frame, columns=sweep_columns, show="headings", height=8)
-        # Set custom column headers
-        self.sweep_tree.heading("sweep_id", text="Sweep ID")
-        self.sweep_tree.heading("substrate_count", text="Substrates")
-        self.sweep_tree.heading("condition_name", text="Experimental Conditions")
-        
-        # Set column widths
-        self.sweep_tree.column("sweep_id", width=80, stretch=False)
-        self.sweep_tree.column("substrate_count", width=80, stretch=False)
-        self.sweep_tree.column("condition_name", width=400, stretch=True)
-        
-        sweep_vsb = ttk.Scrollbar(info_frame, orient="vertical", command=self.sweep_tree.yview)
-        self.sweep_tree.configure(yscroll=sweep_vsb.set)
-        self.sweep_tree.grid(row=1, column=0, sticky="nsew", pady=(5, 0))
-        sweep_vsb.grid(row=1, column=1, sticky="ns", pady=(5, 0))
-        
-        # Buttons for sweep analysis
-        sweep_btns = ttk.Frame(sweep_right); sweep_btns.grid(row=2, column=0, sticky="ew", pady=4)
-        ttk.Button(sweep_btns, text="Export sweep data", command=self.export_sweep_data).grid(row=0, column=0, padx=4)
-        ttk.Button(sweep_btns, text="Save sweep plot", command=self.save_sweep_plot).grid(row=0, column=1, padx=4)
+
+        # Initialize parameter data storage
+        self.parameter_data = None
+        self.available_columns = []
 
     # -------------------- File loading --------------------
     def load_file(self):
@@ -886,11 +871,11 @@ class JVApp(tk.Tk):
 
         self._populate_substrate_combo()
         self.refresh_table(); self.refresh_plots()
-        # Only refresh sweep analysis if we have the methods
+        # Clear any previous parameter plot
         try:
-            self.refresh_sweep_info(); self.refresh_sweep_plots()
+            self._clear_sweep_ax("Load parameter data to begin analysis.")
         except AttributeError:
-            pass  # Sweep functions not yet loaded
+            pass  # Parameter functions not yet loaded
 
     def show_parse_report(self):
         top = tk.Toplevel(self); top.title("Parse Report")
@@ -1361,7 +1346,10 @@ class JVApp(tk.Tk):
         self.ax.set_ylabel("Substrate")
         self.ax.set_title(f"Heatmap: {agg} {metric}")
         self.ax.set_xticks(range(pivot.shape[1])); self.ax.set_xticklabels([("G" if use_groups else "C")+str(g) for g in expected_groups])
-        self.ax.set_yticks(range(pivot.shape[0])); self.ax.set_yticklabels([str(int(s)) for s in pivot.index])
+
+        # Fix substrate axis labels - ensure they correspond to actual substrate numbers in sorted order
+        substrate_labels = [str(int(s)) for s in sorted(pivot.index)]
+        self.ax.set_yticks(range(pivot.shape[0])); self.ax.set_yticklabels(substrate_labels)
 
         vals = pivot.values
         for i in range(vals.shape[0]):
@@ -1429,160 +1417,503 @@ class JVApp(tk.Tk):
         self._cbar = self.fig.colorbar(im, ax=self.ax, fraction=0.046, pad=0.04, label=metric)
         self.canvas.draw_idle()
         
-    # -------------------- Experimental conditions methods --------------------
-    def browse_excel_file(self):
-        """Browse for Excel file containing experimental conditions"""
+    # -------------------- Parameter analysis methods --------------------
+    def browse_parameter_file(self):
+        """Browse for Excel file containing parameter data"""
+        from tkinter import filedialog
         path = filedialog.askopenfilename(
-            title="Select experiment conditions Excel file",
+            title="Select parameter data Excel file",
             filetypes=[("Excel files", "*.xlsx *.xls"), ("All files", "*.*")]
         )
         if path:
-            self.excel_path_var.set(path)
+            self.param_excel_path.set(path)
             
-    def load_conditions(self):
-        """Load experimental conditions from Excel file"""
-        excel_path = self.excel_path_var.get()
+    def load_parameter_data(self):
+        """Load parameter data from Excel file"""
+        excel_path = self.param_excel_path.get()
         if not excel_path:
             messagebox.showwarning("No file", "Please specify an Excel file path.")
             return
-            
-        print(f"[MANUAL LOAD] Attempting to load conditions from: {excel_path}")
-        print(f"[MANUAL LOAD] Current working directory: {Path.cwd()}")
-        print(f"[MANUAL LOAD] Excel file exists: {Path(excel_path).exists()}")
-        
-        self.conditions_df, self.runsheet_df = load_experimental_conditions(excel_path)
-        print(f"[MANUAL LOAD] Conditions result is None: {self.conditions_df is None}")
-        print(f"[MANUAL LOAD] Runsheet result is None: {self.runsheet_df is None}")
-        
-        if self.conditions_df is None:
-            print("[MANUAL LOAD] ERROR: conditions_df is None - showing error dialog")
-            messagebox.showerror("Load failed", f"[MANUAL] Could not load conditions from {excel_path}\n\nCheck the console for detailed error information.")
-        else:
-            has_excess_pbi2 = 'excess PbI2' in self.conditions_df.columns
-            sheet_type = "ROSIE" if has_excess_pbi2 else "Runsheet"
-            runsheet_info = f" + Runsheet ({len(self.runsheet_df)} entries)" if self.runsheet_df is not None else ""
-            print(f"[MANUAL LOAD] SUCCESS: Loaded {sheet_type} sheet with {len(self.conditions_df)} entries{runsheet_info}")
-            messagebox.showinfo("Success", f"Loaded {len(self.conditions_df)} entries from {sheet_type} sheet{runsheet_info}")
-            
-            # Analyze sweep parameters using both sheets
-            self.sweep_analysis = analyze_sweep_parameters(self.conditions_df, self.runsheet_df)
-            self.update_sweep_selection_options()
-            self.refresh_sweep_info()  # Update the summary table immediately
-            
-            if self.data:  # Re-map existing data if available
-                self.data = map_sweeps_to_conditions(self.data, self.conditions_df)
-                self.df = self._to_dataframe(self.data)
-                self.df["group_index"] = self.df["composition_index"].apply(comp_to_group)
-                self.df_with_flags = self.df.copy()
-                self.df_with_flags["include"] = True  # Initialize all rows as included
-                self.refresh_table()
-                self.refresh_sweep_info()
-                self.refresh_sweep_plots()
-                
-    def refresh_sweep_info(self):
-        """Refresh the sweep conditions summary table"""
-        self.sweep_tree.delete(*self.sweep_tree.get_children())
-        
-        # If we have sweep analysis data, use that to show all available conditions
-        if self.sweep_analysis:
-            for sweep_id in sorted(self.sweep_analysis.keys()):
-                analysis = self.sweep_analysis[sweep_id]
-                
-                # Check if we have JV data for this sweep
-                data_available = False
-                measured_substrates = 0
-                if self.df_with_flags is not None and not self.df_with_flags.empty:
-                    sweep_data = self.df_with_flags[self.df_with_flags['sweep_id'] == sweep_id]
-                    if not sweep_data.empty:
-                        data_available = True
-                        measured_substrates = sweep_data['substrate'].nunique()
-                
-                # Create condition description
-                condition_desc = f"{analysis['description']} "
-                if data_available:
-                    condition_desc += f"[{measured_substrates}/{len(analysis['substrates'])} measured]"
-                else:
-                    condition_desc += f"[0/{len(analysis['substrates'])} measured]"
-                
-                values = (
-                    sweep_id,
-                    len(analysis['substrates']),  # Total substrates in this sweep
-                    condition_desc
-                )
-                self.sweep_tree.insert("", "end", values=values)
+
+        try:
+            # Try to load the Excel file
+            self.parameter_data = pd.read_excel(excel_path)
+
+            # Detect available columns for parameter selection
+            numeric_columns = self.parameter_data.select_dtypes(include=[np.number]).columns.tolist()
+            all_columns = self.parameter_data.columns.tolist()
+
+            # Performance metrics that are always available from JV data
+            performance_metrics = ["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"]
+
+            # Combine parameter columns with performance metrics for Y-axis
+            y_axis_options = performance_metrics + all_columns
+
+            # Update dropdowns with available columns
+            self.available_columns = all_columns
+            self.x_param_cb['values'] = all_columns
+            self.y_param_cb['values'] = y_axis_options
+            self.color_param_cb['values'] = ['None'] + y_axis_options
+
+            # Set default parameters
+            if numeric_columns:
+                self.x_param_var.set(numeric_columns[0])
+            # Keep PCE as default Y parameter
+            self.y_param_var.set("PCE_pct")
+
+            # Update info display
+            self.update_parameter_info()
+
+            messagebox.showinfo("Success", f"Loaded Excel file with {len(self.parameter_data)} rows and {len(all_columns)} columns.")
+
+        except Exception as e:
+            messagebox.showerror("Load failed", f"Could not load parameter data from {excel_path}\n\nError: {str(e)}")
+
+    def update_parameter_info(self):
+        """Update the parameter info text display"""
+        self.param_info_text.delete(1.0, tk.END)
+
+        if self.parameter_data is None:
+            self.param_info_text.insert(tk.END, "No data loaded.")
             return
-        
-        # Fallback: use df_with_flags if no sweep analysis available
+
+        info_text = f"Loaded data:\n"
+        info_text += f"Rows: {len(self.parameter_data)}\n"
+        info_text += f"Columns: {len(self.parameter_data.columns)}\n\n"
+        info_text += "Available columns:\n"
+
+        for col in self.parameter_data.columns:
+            dtype = str(self.parameter_data[col].dtype)
+            non_null = self.parameter_data[col].notna().sum()
+            info_text += f"• {col} ({dtype}): {non_null}/{len(self.parameter_data)} values\n"
+
+        self.param_info_text.insert(tk.END, info_text)
+                
+    def update_parameter_plot(self, event=None):
+        """Generate parameter vs performance plots"""
+        if self.parameter_data is None:
+            self._clear_sweep_ax("No parameter data loaded.")
+            return
+
         if self.df_with_flags is None or self.df_with_flags.empty:
+            self._clear_sweep_ax("No JV data available.")
             return
-            
-        # Group by sweep_id and condition_name
-        sweep_summary = self.df_with_flags.groupby(['sweep_id', 'condition_name']).agg({
-            'substrate': 'nunique'
-        }).reset_index()
-        
-        sweep_summary = sweep_summary.rename(columns={'substrate': 'substrate_count'})
-        
-        for _, row in sweep_summary.iterrows():
-            if pd.notna(row['sweep_id']):
-                values = (
-                    int(row['sweep_id']),
-                    int(row['substrate_count']),
-                    row['condition_name'] or "No conditions"
-                )
-                self.sweep_tree.insert("", "end", values=values)
-                
-    def refresh_sweep_plots(self):
-        """Generate sweep-based plots"""
-        if self.df_with_flags is None or self.df_with_flags.empty:
-            self._clear_sweep_ax("No data to plot.")
+
+        x_param = self.x_param_var.get()
+        y_param = self.y_param_var.get()
+        color_param = self.color_param_var.get()
+        plot_type = self.plot_type_var.get()
+
+        if not x_param:
+            self._clear_sweep_ax("Please select an X-axis parameter.")
             return
-            
-        df = self.df_with_flags.copy()  # All rows are valid since we delete instead of mark
-        
-        # Filter out entries without sweep information
-        df = df.dropna(subset=['sweep_id'])
-        
-        if df.empty:
-            self._clear_sweep_ax("No sweep data available. Load experimental conditions first.")
-            return
-            
-        metric = self.sweep_metric.get()
-        plot_type = self.sweep_plot_type.get()
-        selected_sweep = self.selected_sweep_id.get()
-        
-        # Filter by selected sweep if not "All"
-        if selected_sweep != -1:
-            df = df[df['sweep_id'] == selected_sweep]
-            if df.empty:
-                self._clear_sweep_ax(f"No data for Sweep {selected_sweep}")
+
+        # Try to match parameter data with JV data
+        try:
+            combined_data = self._merge_parameter_and_jv_data()
+            if combined_data is None or combined_data.empty:
+                self._clear_sweep_ax("Could not match parameter data with JV data.")
                 return
-        
-        # Combine forward/reverse if selected
-        if self.sweep_combine_directions.get():
-            df_plot = df.groupby(['sweep_id', 'substrate'])[metric].mean().reset_index()
-        else:
-            df_plot = df.copy()
-            
+        except Exception as e:
+            self._clear_sweep_ax(f"Error combining data: {str(e)}")
+            return
+
         self._reset_sweep_axes()
-        
-        # Auto-select plot type based on sweep analysis
-        if plot_type == "auto":
-            plot_type = self._determine_optimal_plot_type(selected_sweep)
-        
-        if plot_type == "boxplot":
-            self._plot_sweep_boxplot(df_plot, metric)
-        elif plot_type == "1D_line":
-            self._plot_parameter_vs_performance(df, metric, selected_sweep)
-        elif plot_type == "2D_scatter":
-            self._plot_2d_parameter_analysis(df, metric, selected_sweep)
-        elif plot_type == "3D_surface":
-            self._plot_3d_parameter_analysis(df, metric, selected_sweep)
-        else:  # fallback to scatter
-            self._plot_sweep_scatter(df_plot, metric)
-            
+
+        # Generate plot based on type
+        if plot_type == "scatter":
+            self._plot_parameter_scatter(combined_data, x_param, y_param, color_param)
+        elif plot_type == "bubble":
+            self._plot_parameter_bubble(combined_data, x_param, y_param, color_param)
+        elif plot_type == "line":
+            self._plot_parameter_line(combined_data, x_param, y_param, color_param)
+        elif plot_type == "heatmap":
+            self._plot_parameter_heatmap(combined_data, x_param, y_param, color_param)
+        elif plot_type == "surface":
+            self._plot_parameter_surface(combined_data, x_param, y_param, color_param)
+        elif plot_type == "violin":
+            self._plot_parameter_violin(combined_data, x_param, y_param, color_param)
+        elif plot_type == "box":
+            self._plot_parameter_box(combined_data, x_param, y_param, color_param)
+        elif plot_type == "parallel_coords":
+            self._plot_parameter_parallel_coords(combined_data, x_param, y_param, color_param)
+
         self.sweep_canvas.draw_idle()
-        
+                
+    def _merge_parameter_and_jv_data(self):
+        """Merge parameter data with JV data"""
+        if self.parameter_data is None or self.df_with_flags is None:
+            return None
+
+        # Try to find common columns for merging (substrate, sample, position, etc.)
+        jv_data = self.df_with_flags.copy()
+        param_data = self.parameter_data.copy()
+
+        # Common merge strategies
+        merge_columns = []
+
+        # Strategy 1: Try 'substrate' column
+        if 'substrate' in jv_data.columns and 'substrate' in param_data.columns:
+            merge_columns = ['substrate']
+        elif 'Substrate' in param_data.columns and 'substrate' in jv_data.columns:
+            param_data = param_data.rename(columns={'Substrate': 'substrate'})
+            merge_columns = ['substrate']
+
+        # Strategy 2: Try other common identifiers
+        if not merge_columns:
+            for col_jv, col_param in [('substrate', 'Sample'), ('substrate', 'Position'),
+                                     ('pixel_id', 'Pixel'), ('composition_index', 'Composition')]:
+                if col_jv in jv_data.columns and col_param in param_data.columns:
+                    param_data = param_data.rename(columns={col_param: col_jv})
+                    merge_columns = [col_jv]
+                    break
+
+        if not merge_columns:
+            # Fallback: try to merge by index if sizes match
+            if len(jv_data) == len(param_data):
+                # Reset indices and merge by position
+                jv_data = jv_data.reset_index(drop=True)
+                param_data = param_data.reset_index(drop=True)
+                combined = pd.concat([jv_data, param_data], axis=1)
+                return combined
+            else:
+                return None
+
+        # Perform the merge
+        try:
+            combined = jv_data.merge(param_data, on=merge_columns, how='inner')
+            return combined
+        except Exception:
+            return None
+
+    def save_parameter_plot(self):
+        """Save the current parameter plot"""
+        if not hasattr(self.sweep_ax, 'figure') or self.sweep_ax.figure is None:
+            messagebox.showwarning("No plot", "No plot to save. Generate a plot first.")
+            return
+
+        try:
+            from tkinter import filedialog
+            path = filedialog.asksaveasfilename(
+                defaultextension=".png",
+                filetypes=[("PNG files", "*.png"), ("SVG files", "*.svg"), ("PDF files", "*.pdf")]
+            )
+            if path:
+                self.sweep_fig.savefig(path, dpi=300, bbox_inches='tight')
+                messagebox.showinfo("Success", f"Plot saved to {path}")
+        except Exception as e:
+            messagebox.showerror("Save failed", f"Could not save plot: {str(e)}")
+
+    def _plot_parameter_scatter(self, data, x_param, y_param, color_param):
+        """Create scatter plot of parameter vs performance"""
+        x_values = data[x_param].dropna()
+        y_values = data[y_param].dropna()
+
+        # Align x and y values
+        valid_indices = data[[x_param, y_param]].dropna().index
+        x_values = data.loc[valid_indices, x_param]
+        y_values = data.loc[valid_indices, y_param]
+
+        if len(x_values) == 0:
+            self._clear_sweep_ax("No valid data points for selected parameters.")
+            return
+
+        if color_param and color_param != 'None' and color_param in data.columns:
+            color_values = data.loc[valid_indices, color_param]
+            scatter = self.sweep_ax.scatter(x_values, y_values, c=color_values, cmap='viridis', alpha=0.7)
+            self.sweep_fig.colorbar(scatter, ax=self.sweep_ax, label=color_param)
+        else:
+            self.sweep_ax.scatter(x_values, y_values, alpha=0.7)
+
+        self.sweep_ax.set_xlabel(x_param)
+        self.sweep_ax.set_ylabel(y_param)
+        self.sweep_ax.set_title(f'{y_param} vs {x_param}')
+        self.sweep_ax.grid(True, alpha=0.3)
+
+    def _plot_parameter_line(self, data, x_param, y_param, color_param):
+        """Create line plot of parameter vs performance"""
+        # Group by x_param and calculate mean y_param
+        grouped = data.groupby(x_param)[y_param].agg(['mean', 'std']).reset_index()
+
+        if grouped.empty:
+            self._clear_sweep_ax("No valid data for line plot.")
+            return
+
+        x_values = grouped[x_param]
+        y_means = grouped['mean']
+        y_stds = grouped['std'].fillna(0)
+
+        self.sweep_ax.plot(x_values, y_means, 'o-', linewidth=2, markersize=6)
+        self.sweep_ax.fill_between(x_values, y_means - y_stds, y_means + y_stds, alpha=0.3)
+
+        self.sweep_ax.set_xlabel(x_param)
+        self.sweep_ax.set_ylabel(y_param)
+        self.sweep_ax.set_title(f'{y_param} vs {x_param} (with std)')
+        self.sweep_ax.grid(True, alpha=0.3)
+
+    def _plot_parameter_heatmap(self, data, x_param, y_param, color_param):
+        """Create heatmap of parameter vs performance"""
+        if color_param == 'None' or not color_param:
+            # Use y_param as the color parameter
+            color_param = y_param
+
+        # Create pivot table for heatmap
+        try:
+            # For heatmap, we need to discretize continuous variables
+            x_bins = pd.cut(data[x_param], bins=10, duplicates='drop')
+            if color_param != y_param and color_param in data.columns:
+                # y_param goes to y-axis, color_param values are plotted
+                y_bins = pd.cut(data[y_param], bins=10, duplicates='drop')
+                # Note: unstack() makes the last groupby level into columns, so we need y_bins as the first argument
+                pivot_table = data.groupby([y_bins, x_bins])[color_param].mean().unstack()
+                ylabel = y_param
+                color_label = color_param
+            else:
+                # Use substrate or another categorical variable for y-axis
+                if 'substrate' in data.columns:
+                    pivot_table = data.groupby([x_bins, 'substrate'])[y_param].mean().unstack()
+                    ylabel = 'Substrate'
+                    color_label = y_param
+                else:
+                    self._clear_sweep_ax("Cannot create heatmap: need categorical variable for y-axis.")
+                    return
+
+            if pivot_table.empty:
+                self._clear_sweep_ax("No data for heatmap.")
+                return
+
+            im = self.sweep_ax.imshow(pivot_table.values, cmap='viridis', aspect='auto', interpolation='nearest')
+            self.sweep_fig.colorbar(im, ax=self.sweep_ax, label=color_label)
+
+            # Set ticks and labels
+            # For heatmap: rows (y-axis) = index, columns (x-axis) = columns
+            self.sweep_ax.set_xticks(range(len(pivot_table.columns)))
+            # Format x-axis labels (these are x_param values)
+            x_labels = []
+            for col in pivot_table.columns:
+                if hasattr(col, 'mid'):  # pd.Interval object (x_bins)
+                    x_labels.append(f"{col.mid:.2f}")
+                else:
+                    x_labels.append(str(col))
+            self.sweep_ax.set_xticklabels(x_labels, rotation=45)
+
+            self.sweep_ax.set_yticks(range(len(pivot_table.index)))
+            # Format y-axis labels (these are y_param values)
+            y_labels = []
+            for idx in pivot_table.index:
+                if hasattr(idx, 'mid'):  # pd.Interval object (y_bins)
+                    y_labels.append(f"{idx.mid:.2f}")
+                else:
+                    y_labels.append(str(idx))
+            self.sweep_ax.set_yticklabels(y_labels)
+
+            self.sweep_ax.set_xlabel(x_param)
+            self.sweep_ax.set_ylabel(ylabel)
+            self.sweep_ax.set_title(f'Heatmap: {color_label} vs {x_param} and {ylabel}')
+
+        except Exception as e:
+            self._clear_sweep_ax(f"Error creating heatmap: {str(e)}")
+
+    def _plot_parameter_surface(self, data, x_param, y_param, color_param):
+        """Create 3D surface plot of parameter vs performance"""
+        if color_param == 'None' or not color_param or color_param not in data.columns:
+            self._clear_sweep_ax("Surface plot requires a color parameter.")
+            return
+
+        try:
+            from mpl_toolkits.mplot3d import Axes3D
+
+            # Clear and create 3D subplot
+            self.sweep_fig.clf()
+            ax = self.sweep_fig.add_subplot(111, projection='3d')
+
+            # Get the data
+            valid_data = data[[x_param, color_param, y_param]].dropna()
+            if len(valid_data) < 4:
+                self._clear_sweep_ax("Not enough data points for surface plot.")
+                return
+
+            x_vals = valid_data[x_param]
+            y_vals = valid_data[color_param]
+            z_vals = valid_data[y_param]
+
+            # Create a scatter plot in 3D space
+            scatter = ax.scatter(x_vals, y_vals, z_vals, c=z_vals, cmap='viridis')
+
+            ax.set_xlabel(x_param)
+            ax.set_ylabel(color_param)
+            ax.set_zlabel(y_param)
+            ax.set_title(f'3D Plot: {y_param} vs {x_param} and {color_param}')
+
+            self.sweep_fig.colorbar(scatter, ax=ax, label=y_param, shrink=0.8)
+
+        except ImportError:
+            self._clear_sweep_ax("3D plotting not available.")
+        except Exception as e:
+            self._clear_sweep_ax(f"Error creating surface plot: {str(e)}")
+
+    def _plot_parameter_bubble(self, data, x_param, y_param, color_param):
+        """Create bubble plot with size based on color parameter"""
+        valid_indices = data[[x_param, y_param]].dropna().index
+        x_values = data.loc[valid_indices, x_param]
+        y_values = data.loc[valid_indices, y_param]
+
+        if len(x_values) == 0:
+            self._clear_sweep_ax("No valid data points for selected parameters.")
+            return
+
+        if color_param and color_param != 'None' and color_param in data.columns:
+            size_values = data.loc[valid_indices, color_param]
+            # Normalize sizes to reasonable range (20-200 pixels)
+            size_norm = (size_values - size_values.min()) / (size_values.max() - size_values.min()) if size_values.max() != size_values.min() else 0.5
+            sizes = 20 + 180 * size_norm
+            scatter = self.sweep_ax.scatter(x_values, y_values, s=sizes, c=size_values, cmap='viridis', alpha=0.6)
+            self.sweep_cbar = self.sweep_fig.colorbar(scatter, ax=self.sweep_ax, label=f'{color_param} (size & color)')
+        else:
+            self.sweep_ax.scatter(x_values, y_values, alpha=0.7, s=100)
+
+        self.sweep_ax.set_xlabel(x_param, fontsize=12)
+        self.sweep_ax.set_ylabel(y_param, fontsize=12)
+        self.sweep_ax.set_title(f'Bubble Plot: {y_param} vs {x_param}', fontsize=14)
+        self.sweep_ax.grid(True, alpha=0.3)
+
+    def _plot_parameter_violin(self, data, x_param, y_param, color_param):
+        """Create violin plot"""
+        try:
+            import seaborn as sns
+
+            # Clear and recreate axes for seaborn
+            self._reset_sweep_axes()
+
+            # Create violin plot
+            if color_param and color_param != 'None' and color_param in data.columns:
+                sns.violinplot(data=data, x=x_param, y=y_param, hue=color_param, ax=self.sweep_ax)
+            else:
+                sns.violinplot(data=data, x=x_param, y=y_param, ax=self.sweep_ax)
+
+            self.sweep_ax.set_xlabel(x_param, fontsize=12)
+            self.sweep_ax.set_ylabel(y_param, fontsize=12)
+            self.sweep_ax.set_title(f'Violin Plot: {y_param} vs {x_param}', fontsize=14)
+            self.sweep_ax.grid(True, alpha=0.3)
+
+        except ImportError:
+            self._clear_sweep_ax("Seaborn not available for violin plots. Install with: pip install seaborn")
+        except Exception as e:
+            self._clear_sweep_ax(f"Error creating violin plot: {str(e)}")
+
+    def _plot_parameter_box(self, data, x_param, y_param, color_param):
+        """Create box plot"""
+        try:
+            # Group data for box plot
+            grouped_data = []
+            labels = []
+
+            for group_val in data[x_param].unique():
+                group_data = data[data[x_param] == group_val][y_param].dropna()
+                if len(group_data) > 0:
+                    grouped_data.append(group_data)
+                    labels.append(str(group_val))
+
+            if not grouped_data:
+                self._clear_sweep_ax("No valid data for box plot.")
+                return
+
+            box_plot = self.sweep_ax.boxplot(grouped_data, labels=labels, patch_artist=True)
+
+            # Color boxes if color parameter is specified
+            if color_param and color_param != 'None' and color_param in data.columns:
+                colors = plt.cm.viridis(np.linspace(0, 1, len(box_plot['boxes'])))
+                for patch, color in zip(box_plot['boxes'], colors):
+                    patch.set_facecolor(color)
+
+            self.sweep_ax.set_xlabel(x_param, fontsize=12)
+            self.sweep_ax.set_ylabel(y_param, fontsize=12)
+            self.sweep_ax.set_title(f'Box Plot: {y_param} vs {x_param}', fontsize=14)
+            self.sweep_ax.grid(True, alpha=0.3)
+
+        except Exception as e:
+            self._clear_sweep_ax(f"Error creating box plot: {str(e)}")
+
+    def _plot_parameter_parallel_coords(self, data, x_param, y_param, color_param):
+        """Create parallel coordinates plot"""
+        try:
+            import pandas as pd
+            from pandas.plotting import parallel_coordinates
+
+            # Select numeric columns for parallel coordinates
+            numeric_cols = data.select_dtypes(include=[np.number]).columns.tolist()
+
+            # Include the parameters and performance metrics
+            important_cols = [x_param, y_param]
+            if color_param and color_param != 'None' and color_param in data.columns:
+                important_cols.append(color_param)
+
+            # Add performance metrics if available
+            perf_metrics = ['Voc', 'Jsc_mAcm2', 'FF_pct', 'PCE_pct']
+            for metric in perf_metrics:
+                if metric in numeric_cols and metric not in important_cols:
+                    important_cols.append(metric)
+
+            # Add other numeric columns (limit to reasonable number)
+            other_cols = [col for col in numeric_cols if col not in important_cols][:5]
+            plot_cols = important_cols + other_cols
+
+            # Remove duplicates and ensure columns exist
+            plot_cols = [col for col in plot_cols if col in data.columns]
+            plot_cols = list(dict.fromkeys(plot_cols))  # Remove duplicates while preserving order
+
+            if len(plot_cols) < 2:
+                self._clear_sweep_ax("Need at least 2 numeric columns for parallel coordinates plot.")
+                return
+
+            # Prepare data for parallel coordinates
+            plot_data = data[plot_cols].dropna()
+
+            if len(plot_data) == 0:
+                self._clear_sweep_ax("No valid data for parallel coordinates plot.")
+                return
+
+            # Use color parameter for grouping, or create groups based on y_param quartiles
+            if color_param and color_param != 'None' and color_param in data.columns:
+                if data[color_param].dtype in ['object', 'category'] or data[color_param].nunique() <= 10:
+                    class_col = color_param
+                    plot_data[class_col] = data[color_param]
+                else:
+                    # Create quartile groups for continuous color parameter
+                    quartiles = pd.qcut(data[color_param], q=4, duplicates='drop', labels=['Q1', 'Q2', 'Q3', 'Q4'])
+                    plot_data['quartile_group'] = quartiles
+                    class_col = 'quartile_group'
+            else:
+                # Create quartile groups based on y_param
+                quartiles = pd.qcut(data[y_param], q=4, duplicates='drop', labels=['Low', 'Mid-Low', 'Mid-High', 'High'])
+                plot_data['performance_group'] = quartiles
+                class_col = 'performance_group'
+
+            # Remove rows with NaN in class column
+            plot_data = plot_data.dropna(subset=[class_col])
+
+            if len(plot_data) == 0:
+                self._clear_sweep_ax("No valid data after grouping for parallel coordinates plot.")
+                return
+
+            # Create the parallel coordinates plot
+            self._reset_sweep_axes()
+            parallel_coordinates(plot_data, class_col, ax=self.sweep_ax, alpha=0.7)
+
+            self.sweep_ax.set_title(f'Parallel Coordinates Plot (colored by {class_col})', fontsize=14)
+            self.sweep_ax.grid(True, alpha=0.3)
+
+            # Rotate x-axis labels for better readability
+            self.sweep_ax.tick_params(axis='x', rotation=45)
+
+            # Move legend outside plot area
+            self.sweep_ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
+        except ImportError as e:
+            self._clear_sweep_ax("Pandas plotting not available for parallel coordinates. Error: " + str(e))
+        except Exception as e:
+            self._clear_sweep_ax(f"Error creating parallel coordinates plot: {str(e)}")
+
     def _reset_sweep_axes(self):
         """Reset sweep plot axes"""
         if getattr(self, "sweep_cbar", None) is not None:
@@ -1599,24 +1930,6 @@ class JVApp(tk.Tk):
         self.sweep_ax.axis("off")
         self.sweep_canvas.draw_idle()
         
-    def _plot_sweep_boxplot(self, df: pd.DataFrame, metric: str):
-        """Create boxplot of metric vs sweep"""
-        sweep_ids = sorted(df['sweep_id'].unique())
-        data_series = []
-        labels = []
-        
-        for sweep_id in sweep_ids:
-            sweep_data = df[df['sweep_id'] == sweep_id][metric].dropna()
-            if len(sweep_data) > 0:
-                data_series.append(sweep_data.values)
-                labels.append(f"Sweep {int(sweep_id)}")
-                
-        if data_series:
-            self.sweep_ax.boxplot(data_series, labels=labels, showmeans=True)
-            self.sweep_ax.set_xlabel("Experimental Sweep")
-            self.sweep_ax.set_ylabel(metric)
-            self.sweep_ax.set_title(f"Performance by Experimental Sweep: {metric}")
-            self.sweep_ax.grid(True, alpha=0.3)
             
     def _plot_sweep_scatter(self, df: pd.DataFrame, metric: str):
         """Create scatter plot of metric vs sweep"""
@@ -2044,6 +2357,7 @@ class JVApp(tk.Tk):
         self.sweep_info_text.delete(1.0, tk.END)
         self.sweep_info_text.insert(tk.END, info_text)
 
+
     def _build_jv_tab(self):
         """Build the JV curve visualization tab"""
         self.jv_frame.columnconfigure(0, weight=0); self.jv_frame.columnconfigure(1, weight=1)
@@ -2134,8 +2448,12 @@ class JVApp(tk.Tk):
                   command=self.plot_jv_curves).grid(row=13, column=0, sticky="ew", pady=8)
         
         # Clear button
-        ttk.Button(jv_left, text="Clear Plot", 
+        ttk.Button(jv_left, text="Clear Plot",
                   command=self.clear_jv_plot).grid(row=14, column=0, sticky="ew")
+
+        # Save plot button
+        ttk.Button(jv_left, text="Save Plot",
+                  command=self.save_jv_plot).grid(row=15, column=0, sticky="ew", pady=2)
         
         # Right panel: JV curve plot
         jv_right = ttk.Frame(self.jv_frame, padding=8); jv_right.grid(row=0, column=1, sticky="nsew")
@@ -2325,7 +2643,7 @@ class JVApp(tk.Tk):
                 if pair['forward'] is not None:
                     sweep = pair['forward']
                     if len(sweep.voltage) > 0 and len(sweep.current_A) > 0:
-                        current_density = sweep.current_A / sweep.area_cm2 * 1000 * 1.4  # mA/cm² (corrected)
+                        current_density = sweep.current_A / sweep.area_cm2 * 1000 * 1.3  # mA/cm² (corrected)
                         label = f"S{substrate}-C{comp}P{pos} (F)"
                         self.jv_ax.plot(sweep.voltage, current_density, color=base_color, label=label, linewidth=2, alpha=1.0)
                 
@@ -2333,7 +2651,7 @@ class JVApp(tk.Tk):
                 if pair['reverse'] is not None:
                     sweep = pair['reverse']
                     if len(sweep.voltage) > 0 and len(sweep.current_A) > 0:
-                        current_density = sweep.current_A / sweep.area_cm2 * 1000 * 1.4  # mA/cm² (corrected)
+                        current_density = sweep.current_A / sweep.area_cm2 * 1000 * 1.3  # mA/cm² (corrected)
                         label = f"S{substrate}-C{comp}P{pos} (R)"
                         self.jv_ax.plot(sweep.voltage, current_density, color=base_color, label=label, linewidth=2, linestyle="--", alpha=0.6)
                 
@@ -2371,7 +2689,21 @@ class JVApp(tk.Tk):
         self.jv_ax.set_title("JV Curves - Select samples to plot")
         self.jv_ax.grid(True, alpha=0.3)
         self.jv_canvas.draw()
-    
+
+    def save_jv_plot(self):
+        """Save the JV curves plot"""
+        path = filedialog.asksaveasfilename(
+            title="Save JV curves plot",
+            defaultextension=".png",
+            filetypes=[("PNG", "*.png"), ("SVG", "*.svg"), ("PDF", "*.pdf")]
+        )
+        if not path: return
+        try:
+            self.jv_fig.savefig(path, dpi=300, bbox_inches="tight")
+            messagebox.showinfo("Saved", f"JV curves plot saved to:\n{path}")
+        except Exception as e:
+            messagebox.showerror("Save failed", f"Could not save JV plot: {str(e)}")
+
     def update_jv_axes(self):
         """Update JV plot axes based on user controls"""
         if not hasattr(self, 'jv_ax'):
@@ -2410,6 +2742,7 @@ class JVApp(tk.Tk):
             self.jv_canvas.draw()
         except Exception as e:
             print(f"Error updating axes: {e}")
+
 
 if __name__ == "__main__":
     app = JVApp()
