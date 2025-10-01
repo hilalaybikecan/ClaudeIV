@@ -220,13 +220,13 @@ def compute_metrics(voltage: np.ndarray, current_A: np.ndarray, area_cm2: float,
         FF = (abs(Vmpp) * abs(Jmpp_Acm2)) / (abs(Voc) * abs(Jsc_Acm2))
         FF_pct = 100.0 * FF
 
-    # PCE (%) = Pout_mpp / Pin × 100 × 1.5 (sun intensity correction)
+    # PCE (%) = Pout_mpp / Pin × 100 × 1.4 (sun intensity correction)
     PCE_pct = None
     if light_mw_cm2 > 0:
-        PCE_pct = (Pmpp_out / light_mw_cm2) * 100.0 * 1.5
+        PCE_pct = (Pmpp_out / light_mw_cm2) * 100.0 * 1.4
 
-    # Report Jsc as positive mA/cm² × 1.5 (sun intensity correction)
-    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3 * 1.5
+    # Report Jsc as positive mA/cm² × 1.4 (sun intensity correction)
+    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3 * 1.4
 
     return Voc, Jsc_mAcm2, FF_pct, PCE_pct
 
@@ -1150,8 +1150,21 @@ class JVApp(tk.Tk):
         numerical_cols = ["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"]
         grouping_cols = ["substrate", "composition_index"]
 
-        # Calculate aggregated metrics
-        aggregated = df_to_export.groupby(grouping_cols)[numerical_cols].mean().reset_index()
+        # Calculate aggregated metrics - both mean and max
+        aggregated_mean = df_to_export.groupby(grouping_cols)[numerical_cols].mean().reset_index()
+        aggregated_max = df_to_export.groupby(grouping_cols)[numerical_cols].max().reset_index()
+
+        # Merge mean and max data
+        aggregated = aggregated_mean.copy()
+
+        # Add max columns with "_max" suffix
+        for col in numerical_cols:
+            aggregated[f"{col}_max"] = aggregated_max[col]
+
+        # Rename mean columns with "_mean" suffix for clarity
+        for col in numerical_cols:
+            aggregated[f"{col}_mean"] = aggregated[col]
+            aggregated.drop(columns=[col], inplace=True)
 
         # Also include group_index for consistency
         aggregated["group_index"] = aggregated["composition_index"].apply(comp_to_group)
@@ -1163,8 +1176,10 @@ class JVApp(tk.Tk):
         counts = df_to_export.groupby(grouping_cols).size().reset_index(name='n_measurements')
         aggregated = aggregated.merge(counts, on=grouping_cols, how='left')
 
-        # Reorder columns to match original table format
-        column_order = ["substrate", "composition_index", "group_index", "Well", "n_measurements"] + numerical_cols
+        # Create column order with mean and max columns
+        mean_cols = [f"{col}_mean" for col in numerical_cols]
+        max_cols = [f"{col}_max" for col in numerical_cols]
+        column_order = ["substrate", "composition_index", "group_index", "Well", "n_measurements"] + mean_cols + max_cols
         aggregated = aggregated[column_order]
 
         aggregated.to_csv(path, index=False)
@@ -2310,7 +2325,7 @@ class JVApp(tk.Tk):
                 if pair['forward'] is not None:
                     sweep = pair['forward']
                     if len(sweep.voltage) > 0 and len(sweep.current_A) > 0:
-                        current_density = sweep.current_A / sweep.area_cm2 * 1000 * 1.5  # mA/cm² (corrected)
+                        current_density = sweep.current_A / sweep.area_cm2 * 1000 * 1.4  # mA/cm² (corrected)
                         label = f"S{substrate}-C{comp}P{pos} (F)"
                         self.jv_ax.plot(sweep.voltage, current_density, color=base_color, label=label, linewidth=2, alpha=1.0)
                 
@@ -2318,7 +2333,7 @@ class JVApp(tk.Tk):
                 if pair['reverse'] is not None:
                     sweep = pair['reverse']
                     if len(sweep.voltage) > 0 and len(sweep.current_A) > 0:
-                        current_density = sweep.current_A / sweep.area_cm2 * 1000 * 1.5  # mA/cm² (corrected)
+                        current_density = sweep.current_A / sweep.area_cm2 * 1000 * 1.4  # mA/cm² (corrected)
                         label = f"S{substrate}-C{comp}P{pos} (R)"
                         self.jv_ax.plot(sweep.voltage, current_density, color=base_color, label=label, linewidth=2, linestyle="--", alpha=0.6)
                 
