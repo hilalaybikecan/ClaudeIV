@@ -44,7 +44,7 @@ class JVSweep:
 # ---------------------------- Parsing helpers ----------------------------
 def _substrate_from_filename(path: Path) -> Optional[int]:
     name = path.name
-    for pat in (r"[Ss]ub\s*_?\s*(\d+)", r"[Ss]ubstrate\s*_?\s*(\d+)"):
+    for pat in (r"[Ss]ub[\s_]*(\d+)", r"[Ss]ubstrate[\s_]*(\d+)"):
         m = re.search(pat, name)
         if m:
             try:
@@ -220,13 +220,13 @@ def compute_metrics(voltage: np.ndarray, current_A: np.ndarray, area_cm2: float,
         FF = (abs(Vmpp) * abs(Jmpp_Acm2)) / (abs(Voc) * abs(Jsc_Acm2))
         FF_pct = 100.0 * FF
 
-    # PCE (%) = Pout_mpp / Pin × 100 × 1.3 (sun intensity correction)
+    # PCE (%) = Pout_mpp / Pin × 100 × 1.5 (sun intensity correction)
     PCE_pct = None
     if light_mw_cm2 > 0:
-        PCE_pct = (Pmpp_out / light_mw_cm2) * 100.0 * 1.3
+        PCE_pct = (Pmpp_out / light_mw_cm2) * 100.0 * 1.5
 
-    # Report Jsc as positive mA/cm² × 1.3 (sun intensity correction)
-    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3 * 1.3
+    # Report Jsc as positive mA/cm² × 1.5 (sun intensity correction)
+    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3 * 1.5
 
     return Voc, Jsc_mAcm2, FF_pct, PCE_pct
 
@@ -528,6 +528,53 @@ def map_sweeps_to_conditions(sweeps: List[JVSweep], conditions_df: Optional[pd.D
     
     return sweeps
 
+# ---------------------------- Well ID helpers ----------------------------
+def pixel_id_to_well(pixel_id: int) -> str:
+    """Convert numeric pixel_id to well notation (e.g., 7 -> A1, 13 -> B1)"""
+    # pixel_id = (comp - 1) * 6 + pos
+    # pos is 1-6, comp is 1-11
+    # So pixel_id ranges from 1 to 66
+    if pixel_id < 1 or pixel_id > 66:
+        return f"#{pixel_id}"
+
+    # Calculate composition (1-11) and position (1-6)
+    comp = (pixel_id - 1) // 6 + 1
+    pos = (pixel_id - 1) % 6 + 1
+
+    # Map to well format: rows A-F (position 1-6), columns 1-11 (composition 1-11)
+    row_letter = chr(ord('A') + pos - 1)
+    col_number = comp
+
+    return f"{row_letter}{col_number}"
+
+def well_to_pixel_id(well: str) -> Optional[int]:
+    """Convert well notation to pixel_id (e.g., 'A1' -> 7, 'B1' -> 13)"""
+    well = well.strip().upper()
+    if len(well) < 2:
+        return None
+
+    # Extract row letter and column number
+    row_letter = well[0]
+    try:
+        col_number = int(well[1:])
+    except ValueError:
+        return None
+
+    # Validate
+    if row_letter < 'A' or row_letter > 'F':
+        return None
+    if col_number < 1 or col_number > 11:
+        return None
+
+    # Convert to position and composition
+    pos = ord(row_letter) - ord('A') + 1  # 1-6
+    comp = col_number  # 1-11
+
+    # Calculate pixel_id
+    pixel_id = (comp - 1) * 6 + pos
+
+    return pixel_id
+
 # ---------------------------- GUI ----------------------------
 class JVApp(tk.Tk):
     def __init__(self):
@@ -540,6 +587,7 @@ class JVApp(tk.Tk):
         self.light_mw_cm2 = tk.DoubleVar(value=100.0)
         self.include_forward = tk.BooleanVar(value=True)
         self.include_reverse = tk.BooleanVar(value=True)
+        self.selected_sweep_filter = tk.StringVar(value="All")  # Sweep filter for Tab 1
         self.metric_choice = tk.StringVar(value="PCE_pct")
         self.aggregation_method = tk.StringVar(value="max")
         self.combine_substrates = tk.BooleanVar(value=True)
@@ -547,15 +595,14 @@ class JVApp(tk.Tk):
         self.grouping_mode = tk.StringVar(value="11 compositions")
         self.expand_substrate_axis = tk.BooleanVar(value=True)
 
+        # Plotting options for tab1
+        self.colormap_choice = tk.StringVar(value="viridis")
+        self.x_min_var = tk.StringVar(value="")
+        self.x_max_var = tk.StringVar(value="")
+        self.y_min_var = tk.StringVar(value="")
+        self.y_max_var = tk.StringVar(value="")
+
         # Filters
-        self.min_voc = tk.StringVar(value="")
-        self.max_voc = tk.StringVar(value="")
-        self.min_pce = tk.StringVar(value="")
-        self.max_pce = tk.StringVar(value="")
-        self.min_jsc = tk.StringVar(value="")
-        self.max_jsc = tk.StringVar(value="")
-        self.min_ff  = tk.StringVar(value="")
-        self.max_ff  = tk.StringVar(value="")
 
         # Header regex (restored)
         self.header_pattern_var = tk.StringVar(value=DEFAULT_HEADER_REGEX)
@@ -637,52 +684,68 @@ class JVApp(tk.Tk):
         ttk.Button(pfrm, text="Recompute metrics", command=self.recompute_metrics).grid(row=2, column=0, columnspan=2, sticky="ew", pady=4)
 
         ttk.Separator(side).grid(row=6, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Include sweeps").grid(row=7, column=0, sticky="w")
-        ttk.Checkbutton(side, text="Forward", variable=self.include_forward, command=self.refresh_plots).grid(row=8, column=0, sticky="w")
-        ttk.Checkbutton(side, text="Reverse", variable=self.include_reverse, command=self.refresh_plots).grid(row=9, column=0, sticky="w")
+        ttk.Label(side, text="Sweep filter").grid(row=7, column=0, sticky="w")
+        self.sweep_filter_cb = ttk.Combobox(side, textvariable=self.selected_sweep_filter, values=["All"], state="readonly", width=12)
+        self.sweep_filter_cb.grid(row=8, column=0, sticky="ew", pady=2)
+        self.sweep_filter_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
 
-        ttk.Separator(side).grid(row=10, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Metric").grid(row=11, column=0, sticky="w")
+        ttk.Label(side, text="Include sweeps").grid(row=9, column=0, sticky="w", pady=(6, 0))
+        self.fwd_cb = ttk.Checkbutton(side, text="Forward", variable=self.include_forward, command=self.refresh_plots)
+        self.fwd_cb.grid(row=10, column=0, sticky="w")
+        self.rev_cb = ttk.Checkbutton(side, text="Reverse", variable=self.include_reverse, command=self.refresh_plots)
+        self.rev_cb.grid(row=11, column=0, sticky="w")
+
+        ttk.Separator(side).grid(row=12, column=0, sticky="ew", pady=6)
+        ttk.Label(side, text="Metric").grid(row=13, column=0, sticky="w")
         metric_cb = ttk.Combobox(side, textvariable=self.metric_choice, values=["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"], state="readonly", width=12)
-        metric_cb.grid(row=12, column=0, sticky="ew"); metric_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
-        
-        ttk.Label(side, text="Aggregation").grid(row=13, column=0, sticky="w", pady=(4, 0))
+        metric_cb.grid(row=14, column=0, sticky="ew"); metric_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+
+        ttk.Label(side, text="Aggregation").grid(row=15, column=0, sticky="w", pady=(4, 0))
         agg_cb = ttk.Combobox(side, textvariable=self.aggregation_method, values=["mean", "max"], state="readonly", width=12)
-        agg_cb.grid(row=14, column=0, sticky="ew"); agg_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+        agg_cb.grid(row=16, column=0, sticky="ew"); agg_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
 
-        ttk.Separator(side).grid(row=15, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Substrate / Grouping").grid(row=16, column=0, sticky="w")
+        ttk.Separator(side).grid(row=17, column=0, sticky="ew", pady=6)
+        ttk.Label(side, text="Substrate / Grouping").grid(row=18, column=0, sticky="w")
         self.substrate_cb = ttk.Combobox(side, values=["All"], state="readonly")
-        self.substrate_cb.grid(row=17, column=0, sticky="ew", pady=2); self.substrate_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
-        ttk.Checkbutton(side, text="Combine substrates", variable=self.combine_substrates, command=self.refresh_plots).grid(row=18, column=0, sticky="w")
-        ttk.Checkbutton(side, text="Combine F & R", variable=self.combine_fr, command=self.refresh_plots).grid(row=19, column=0, sticky="w")
-        ttk.Label(side, text="Grouping").grid(row=20, column=0, sticky="w", pady=(6, 0))
+        self.substrate_cb.grid(row=19, column=0, sticky="ew", pady=2); self.substrate_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+        ttk.Checkbutton(side, text="Combine substrates", variable=self.combine_substrates, command=self.refresh_plots).grid(row=20, column=0, sticky="w")
+        ttk.Checkbutton(side, text="Combine F & R", variable=self.combine_fr, command=self.on_combine_fr_changed).grid(row=21, column=0, sticky="w")
+        ttk.Label(side, text="Grouping").grid(row=22, column=0, sticky="w", pady=(6, 0))
         grp_cb = ttk.Combobox(side, textvariable=self.grouping_mode, values=["11 compositions", "9 groups"], state="readonly", width=18)
-        grp_cb.grid(row=21, column=0, sticky="ew", pady=2); grp_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
-        ttk.Checkbutton(side, text="Expand x-axis by substrate", variable=self.expand_substrate_axis, command=self.refresh_plots).grid(row=22, column=0, sticky="w", pady=(2, 6))
+        grp_cb.grid(row=23, column=0, sticky="ew", pady=2); grp_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+        ttk.Checkbutton(side, text="Expand x-axis by substrate", variable=self.expand_substrate_axis, command=self.refresh_plots).grid(row=24, column=0, sticky="w", pady=(2, 6))
 
-        ttk.Separator(side).grid(row=23, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Thresholds").grid(row=24, column=0, sticky="w")
-        tfrm = ttk.Frame(side); tfrm.grid(row=25, column=0, sticky="ew")
-        ttk.Label(tfrm, text="Min Voc (V):").grid(row=0, column=0, sticky="w"); ttk.Entry(tfrm, textvariable=self.min_voc, width=8).grid(row=0, column=1, sticky="w", padx=4)
-        ttk.Label(tfrm, text="Max Voc (V):").grid(row=0, column=2, sticky="w"); ttk.Entry(tfrm, textvariable=self.max_voc, width=8).grid(row=0, column=3, sticky="w", padx=4)
-        ttk.Label(tfrm, text="Min PCE (%):").grid(row=1, column=0, sticky="w"); ttk.Entry(tfrm, textvariable=self.min_pce, width=8).grid(row=1, column=1, sticky="w", padx=4)
-        ttk.Label(tfrm, text="Max PCE (%):").grid(row=1, column=2, sticky="w"); ttk.Entry(tfrm, textvariable=self.max_pce, width=8).grid(row=1, column=3, sticky="w", padx=4)
-        ttk.Label(tfrm, text="Min Jsc (mA/cm²):").grid(row=2, column=0, sticky="w"); ttk.Entry(tfrm, textvariable=self.min_jsc, width=8).grid(row=2, column=1, sticky="w", padx=4)
-        ttk.Label(tfrm, text="Max Jsc (mA/cm²):").grid(row=2, column=2, sticky="w"); ttk.Entry(tfrm, textvariable=self.max_jsc, width=8).grid(row=2, column=3, sticky="w", padx=4)
-        ttk.Label(tfrm, text="Min FF (%):").grid(row=3, column=0, sticky="w"); ttk.Entry(tfrm, textvariable=self.min_ff, width=8).grid(row=3, column=1, sticky="w", padx=4)
-        ttk.Label(tfrm, text="Max FF (%):").grid(row=3, column=2, sticky="w"); ttk.Entry(tfrm, textvariable=self.max_ff, width=8).grid(row=3, column=3, sticky="w", padx=4)
-        ttk.Button(tfrm, text="Apply thresholds", command=self.apply_thresholds).grid(row=4, column=0, columnspan=2, sticky="ew", pady=4)
-        ttk.Button(tfrm, text="Reset filters & include all", command=self.reset_filters_include_all).grid(row=4, column=2, columnspan=2, sticky="ew", pady=4)
+        ttk.Separator(side).grid(row=25, column=0, sticky="ew", pady=6)
+        ttk.Label(side, text="Plot Options").grid(row=26, column=0, sticky="w")
+        ttk.Label(side, text="Colormap:").grid(row=27, column=0, sticky="w", pady=(2, 0))
+        colormap_cb = ttk.Combobox(side, textvariable=self.colormap_choice,
+                                    values=["viridis", "plasma", "inferno", "magma", "cividis", "coolwarm", "RdYlGn", "RdYlBu"],
+                                    state="readonly", width=12)
+        colormap_cb.grid(row=28, column=0, sticky="ew")
+        colormap_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
 
-        ttk.Separator(side).grid(row=24, column=0, sticky="ew", pady=6)
-        ttk.Button(side, text="Remove items…", command=self.open_remove_dialog).grid(row=25, column=0, sticky="ew")
+        ttk.Label(side, text="Axis Limits (optional):").grid(row=29, column=0, sticky="w", pady=(4, 0))
+        axis_frame = ttk.Frame(side)
+        axis_frame.grid(row=30, column=0, sticky="ew")
+        ttk.Label(axis_frame, text="X min:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(axis_frame, textvariable=self.x_min_var, width=6).grid(row=0, column=1, sticky="w", padx=2)
+        ttk.Label(axis_frame, text="max:").grid(row=0, column=2, sticky="w")
+        ttk.Entry(axis_frame, textvariable=self.x_max_var, width=6).grid(row=0, column=3, sticky="w", padx=2)
+        ttk.Label(axis_frame, text="Y min:").grid(row=1, column=0, sticky="w")
+        ttk.Entry(axis_frame, textvariable=self.y_min_var, width=6).grid(row=1, column=1, sticky="w", padx=2)
+        ttk.Label(axis_frame, text="max:").grid(row=1, column=2, sticky="w")
+        ttk.Entry(axis_frame, textvariable=self.y_max_var, width=6).grid(row=1, column=3, sticky="w", padx=2)
+        ttk.Button(side, text="Apply limits", command=self.refresh_plots).grid(row=31, column=0, sticky="ew", pady=2)
+        ttk.Button(side, text="Clear limits", command=self.clear_axis_limits).grid(row=32, column=0, sticky="ew", pady=2)
 
-        ttk.Separator(side).grid(row=26, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Header regex").grid(row=27, column=0, sticky="w")
-        ttk.Entry(side, textvariable=self.header_pattern_var, width=38).grid(row=28, column=0, sticky="ew", pady=2)
-        ttk.Button(side, text="Reload last folder/file", command=self.reload_last).grid(row=29, column=0, sticky="ew", pady=2)
-        ttk.Button(side, text="Parse report", command=self.show_parse_report).grid(row=30, column=0, sticky="ew", pady=2)
+        ttk.Separator(side).grid(row=33, column=0, sticky="ew", pady=6)
+        ttk.Button(side, text="Remove items…", command=self.open_remove_dialog).grid(row=34, column=0, sticky="ew")
+
+        ttk.Separator(side).grid(row=35, column=0, sticky="ew", pady=6)
+        ttk.Label(side, text="Header regex").grid(row=36, column=0, sticky="w")
+        ttk.Entry(side, textvariable=self.header_pattern_var, width=38).grid(row=37, column=0, sticky="ew", pady=2)
+        ttk.Button(side, text="Reload last folder/file", command=self.reload_last).grid(row=38, column=0, sticky="ew", pady=2)
+        ttk.Button(side, text="Parse report", command=self.show_parse_report).grid(row=39, column=0, sticky="ew", pady=2)
 
         # Right panel
         right = ttk.Frame(self.comp_frame, padding=8); right.grid(row=0, column=1, sticky="nsew")
@@ -714,7 +777,21 @@ class JVApp(tk.Tk):
         ttk.Button(plot_btns, text="Heatmap (substrate × group)", command=self.plot_heatmap).grid(row=0, column=1, padx=4)
         ttk.Button(plot_btns, text="Substrate pixel map", command=self.plot_substrate_pixel_map).grid(row=0, column=2, padx=4)
         ttk.Button(plot_btns, text="Save plot as image", command=self.save_plot_image).grid(row=0, column=3, padx=4)
-        
+
+        # Add substrate-composition comparison controls
+        comp_compare_frame = ttk.LabelFrame(right, text="Substrate-Composition Comparison", padding=8)
+        comp_compare_frame.grid(row=3, column=0, sticky="ew", pady=(8, 4))
+        ttk.Label(comp_compare_frame, text="Enter substrate-composition pairs (e.g., 5-3, 2-8):").grid(row=0, column=0, sticky="w")
+        self.sub_comp_selection_var = tk.StringVar(value="")
+        ttk.Entry(comp_compare_frame, textvariable=self.sub_comp_selection_var, width=60).grid(row=1, column=0, sticky="ew", padx=(0, 4))
+        comp_compare_btns = ttk.Frame(comp_compare_frame)
+        comp_compare_btns.grid(row=2, column=0, sticky="ew", pady=(4, 0))
+        ttk.Button(comp_compare_btns, text="Manual Pixel Plot", command=self.plot_substrate_composition_boxplot).grid(row=0, column=0, padx=(0, 4))
+        ttk.Button(comp_compare_btns, text="Clear", command=lambda: self.sub_comp_selection_var.set("")).grid(row=0, column=1)
+
+        # Initialize the state of forward/reverse checkboxes based on combine_fr
+        self.on_combine_fr_changed()
+
     def _build_sweep_tab(self):
         """Build the parameter vs performance analysis tab"""
         self.sweep_frame.columnconfigure(0, weight=0); self.sweep_frame.columnconfigure(1, weight=1)
@@ -781,6 +858,49 @@ class JVApp(tk.Tk):
         self.param_info_text.grid(row=17, column=0, sticky="ew", pady=2)
         param_info_scroll = ttk.Scrollbar(sweep_side, command=self.param_info_text.yview)
         self.param_info_text.config(yscrollcommand=param_info_scroll.set)
+
+        ttk.Separator(sweep_side).grid(row=18, column=0, sticky="ew", pady=6)
+
+        # Box plot controls
+        ttk.Label(sweep_side, text="Box Plot Analysis", font=("Arial", 10, "bold")).grid(row=19, column=0, sticky="w", pady=(5, 2))
+
+        # Multi-column selection for box plot grouping
+        ttk.Label(sweep_side, text="Select Columns (Ctrl+Click):").grid(row=20, column=0, sticky="w", pady=(5, 0))
+
+        # Frame for listbox and scrollbar
+        listbox_frame = ttk.Frame(sweep_side)
+        listbox_frame.grid(row=21, column=0, sticky="ew", pady=2)
+
+        # Listbox for multi-selection
+        self.boxplot_columns_listbox = tk.Listbox(listbox_frame, height=6, selectmode=tk.EXTENDED, exportselection=False)
+        self.boxplot_columns_listbox.grid(row=0, column=0, sticky="ew")
+
+        # Scrollbar for listbox
+        listbox_scroll = ttk.Scrollbar(listbox_frame, orient="vertical", command=self.boxplot_columns_listbox.yview)
+        listbox_scroll.grid(row=0, column=1, sticky="ns")
+        self.boxplot_columns_listbox.config(yscrollcommand=listbox_scroll.set)
+
+        listbox_frame.columnconfigure(0, weight=1)
+
+        # Performance metric selection for box plot
+        ttk.Label(sweep_side, text="Performance Metric:").grid(row=22, column=0, sticky="w", pady=(5, 0))
+        self.boxplot_metric_var = tk.StringVar(value="PCE_pct")
+        boxplot_metric_cb = ttk.Combobox(sweep_side, textvariable=self.boxplot_metric_var,
+                                         values=["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"],
+                                         state="readonly", width=30)
+        boxplot_metric_cb.grid(row=23, column=0, sticky="ew", pady=2)
+
+        # Control filtering checkbox
+        self.include_controls_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(sweep_side, text="Include controls (all zeros)",
+                       variable=self.include_controls_var).grid(row=24, column=0, sticky="w", pady=2)
+
+        # Show mean checkbox
+        self.show_mean_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(sweep_side, text="Show mean values",
+                       variable=self.show_mean_var).grid(row=25, column=0, sticky="w", pady=2)
+
+        ttk.Button(sweep_side, text="Generate Box Plot", command=self.generate_box_plot).grid(row=26, column=0, sticky="ew", pady=2)
 
         # Right panel for parameter analysis
         sweep_right = ttk.Frame(self.sweep_frame, padding=8); sweep_right.grid(row=0, column=1, sticky="nsew")
@@ -870,6 +990,7 @@ class JVApp(tk.Tk):
         self.df_with_flags["include"] = True  # Initialize all rows as included
 
         self._populate_substrate_combo()
+        self._populate_sweep_filter_combo()
         self.refresh_table(); self.refresh_plots()
         # Clear any previous parameter plot
         try:
@@ -918,43 +1039,46 @@ class JVApp(tk.Tk):
         cur = self.substrate_cb.get()
         self.substrate_cb.set(cur if cur in values else "All")
 
+    def _populate_sweep_filter_combo(self):
+        """Populate sweep filter dropdown with available sweep IDs"""
+        if self.df is None or self.df.empty:
+            return
+        if "sweep_id" not in self.df.columns:
+            return
+
+        # Get unique sweep IDs, excluding NaN values
+        sweep_ids = self.df["sweep_id"].dropna().unique()
+
+        # If no valid sweep IDs, just show "All"
+        if len(sweep_ids) == 0:
+            self.sweep_filter_cb["values"] = ["All"]
+            self.selected_sweep_filter.set("All")
+            return
+
+        # Sort and convert to strings
+        sweep_ids = sorted([int(s) for s in sweep_ids])
+        values = ["All"] + [str(s) for s in sweep_ids]
+        self.sweep_filter_cb["values"] = values
+
+        # Preserve current selection if valid
+        cur = self.selected_sweep_filter.get()
+        self.selected_sweep_filter.set(cur if cur in values else "All")
+
+        print(f"[SWEEP FILTER] Populated with sweep IDs: {sweep_ids}")
+
     # -------------------- Filters & removal --------------------
-    def apply_thresholds(self):
-        if self.df_with_flags is None or self.df_with_flags.empty: return
-        df = self.df_with_flags
-        include = np.ones(len(df), dtype=bool)
 
-        def _f(x):
-            try:
-                if x == "" or x is None: return None
-                return float(x)
-            except Exception:
-                return None
-
-        mv, xv = _f(self.min_voc.get()), _f(self.max_voc.get())
-        mp, xp = _f(self.min_pce.get()), _f(self.max_pce.get())
-        mjs, xjs = _f(self.min_jsc.get()), _f(self.max_jsc.get())
-        mff, xff = _f(self.min_ff.get()),  _f(self.max_ff.get())
-
-        if mv  is not None: include &= df["Voc"].fillna(-1e9)      >= mv
-        if mp  is not None: include &= df["PCE_pct"].fillna(-1e9)  >= mp
-        if mjs is not None: include &= df["Jsc_mAcm2"].fillna(-1e9)>= mjs
-        if mff is not None: include &= df["FF_pct"].fillna(-1e9)   >= mff
-
-        if xv  is not None: include &= df["Voc"].fillna(1e9)       <= xv
-        if xp  is not None: include &= df["PCE_pct"].fillna(1e9)   <= xp
-        if xjs is not None: include &= df["Jsc_mAcm2"].fillna(1e9) <= xjs
-        if xff is not None: include &= df["FF_pct"].fillna(1e9)    <= xff
-
-        df["include"] = include
-        self.refresh_table(); self.refresh_plots()
-
-    def reset_filters_include_all(self):
-        for var in (self.min_voc, self.max_voc, self.min_pce, self.max_pce, self.min_jsc, self.max_jsc, self.min_ff, self.max_ff):
-            try: var.set("")
-            except Exception: pass
-        self.include_forward.set(True); self.include_reverse.set(True)
-        self.refresh_table(); self.refresh_plots()
+    def on_combine_fr_changed(self):
+        """Update forward/reverse checkboxes state based on combine_fr setting"""
+        if self.combine_fr.get():
+            # When combining F&R, disable the individual checkboxes
+            self.fwd_cb.config(state="disabled")
+            self.rev_cb.config(state="disabled")
+        else:
+            # When not combining, enable the individual checkboxes
+            self.fwd_cb.config(state="normal")
+            self.rev_cb.config(state="normal")
+        self.refresh_plots()
 
     def open_remove_dialog(self):
         if self.df_with_flags is None or self.df_with_flags.empty:
@@ -1128,8 +1252,8 @@ class JVApp(tk.Tk):
         path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
         if not path: return
 
-        # Aggregate data by substrate and composition_index
-        df_to_export = self.df_with_flags.copy()
+        # Use filtered data (respects sweep filter, F/R toggles, and threshold filters)
+        df_to_export = self._filtered_df()
 
         # Group by substrate and composition_index, then calculate means for numerical columns
         numerical_cols = ["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"]
@@ -1199,6 +1323,7 @@ class JVApp(tk.Tk):
         self.df_with_flags = self.df.copy()
         self.df_with_flags["include"] = True  # Initialize all rows as included
         self._populate_substrate_combo()
+        self._populate_sweep_filter_combo()
         self.refresh_table(); self.refresh_plots()
 
     # -------------------- Plotting helpers --------------------
@@ -1214,11 +1339,20 @@ class JVApp(tk.Tk):
     def _filtered_df(self) -> pd.DataFrame:
         if self.df_with_flags is None: return pd.DataFrame()
         df = self.df_with_flags.copy()
-        
+
         # Apply threshold filtering using "include" column
         if "include" in df.columns:
             df = df[df["include"]]
-        
+
+        # Apply sweep filter
+        sweep_filter = self.selected_sweep_filter.get()
+        if sweep_filter != "All" and "sweep_id" in df.columns:
+            try:
+                sweep_num = int(sweep_filter)
+                df = df[df["sweep_id"] == sweep_num]
+            except ValueError:
+                pass  # If conversion fails, ignore filter
+
         # Handle F/R toggles only when not combining
         if not self.combine_fr.get():
             keep = []
@@ -1255,6 +1389,33 @@ class JVApp(tk.Tk):
             # JV tab not yet initialized
             pass
 
+    def clear_axis_limits(self):
+        """Clear all axis limit entries"""
+        self.x_min_var.set("")
+        self.x_max_var.set("")
+        self.y_min_var.set("")
+        self.y_max_var.set("")
+        self.refresh_plots()
+
+    def _apply_axis_limits(self):
+        """Apply axis limits if specified"""
+        try:
+            if self.x_min_var.get():
+                x_min = float(self.x_min_var.get())
+                self.ax.set_xlim(left=x_min)
+            if self.x_max_var.get():
+                x_max = float(self.x_max_var.get())
+                self.ax.set_xlim(right=x_max)
+            if self.y_min_var.get():
+                y_min = float(self.y_min_var.get())
+                self.ax.set_ylim(bottom=y_min)
+            if self.y_max_var.get():
+                y_max = float(self.y_max_var.get())
+                self.ax.set_ylim(top=y_max)
+        except ValueError:
+            # Invalid number format, silently ignore
+            pass
+
     # -------------------- Plots --------------------
     def plot_boxplot_groups(self):
         df = self._filtered_df()
@@ -1269,6 +1430,7 @@ class JVApp(tk.Tk):
 
         data_df = df.copy()
         labels: List[str] = []; series: List[np.ndarray] = []
+        substrate_ids: List[int] = []  # Track which substrate each box belongs to
         agg_method = self.aggregation_method.get()
 
         if self.expand_substrate_axis.get():
@@ -1286,6 +1448,7 @@ class JVApp(tk.Tk):
                     if len(vals) == 0: continue
                     labels.append(f"S{sub}-" + ("G" if use_groups else "C") + str(g))
                     series.append(vals)
+                    substrate_ids.append(sub)
         else:
             sel = self.substrate_cb.get()
             if sel and sel != "All" and not self.combine_substrates.get():
@@ -1293,20 +1456,86 @@ class JVApp(tk.Tk):
                 except Exception: pass
             if agg_method == "max":
                 # For max: group by substrate+composition, take max, then collect those max values
-                vals_by = data_df.groupby([group_col, "substrate"])[metric].max().reset_index().groupby(group_col)[metric].apply(lambda s: s.dropna().values)
+                # Keep track of substrate for each max value
+                grouped_max = data_df.groupby([group_col, "substrate"])[metric].max().reset_index()
+                for g in expected_groups:
+                    g_data = grouped_max[grouped_max[group_col] == g]
+                    if len(g_data) == 0: continue
+                    labels.append(("G" if use_groups else "C") + str(g))
+                    series.append(g_data[metric].dropna().values)
+                    # Store substrate IDs for this group (for coloring)
+                    substrate_ids.append(g_data["substrate"].values.tolist())
             else:
                 # For mean: show distribution of all individual measurements (current behavior)
                 vals_by = data_df.groupby(group_col)[metric].apply(lambda s: s.dropna().values)
-            for g in expected_groups:
-                vals = vals_by.get(g, np.array([]))
-                if len(vals) == 0: continue
-                labels.append(("G" if use_groups else "C") + str(g))
-                series.append(vals)
+                for g in expected_groups:
+                    vals = vals_by.get(g, np.array([]))
+                    if len(vals) == 0: continue
+                    labels.append(("G" if use_groups else "C") + str(g))
+                    series.append(vals)
+                    # For non-expanded mode, track substrates from the data
+                    substrate_ids.append(-1)  # Placeholder, will be filled below
 
         if not series:
             self._clear_ax("No values for selected metric/filters."); return
 
-        self.ax.boxplot(series, showmeans=True, meanline=False)
+        bp = self.ax.boxplot(series, showmeans=True, meanline=False, patch_artist=True)
+
+        # Color boxes by substrate
+        unique_subs = sorted(data_df["substrate"].dropna().astype(int).unique().tolist())
+        colors = plt.cm.tab10(np.linspace(0, 1, max(10, len(unique_subs))))
+        substrate_color_map = {sub: colors[i % len(colors)] for i, sub in enumerate(unique_subs)}
+
+        if self.expand_substrate_axis.get():
+            # Apply colors to each box (substrate_ids contains single substrate per box)
+            for patch, sub_id in zip(bp['boxes'], substrate_ids):
+                patch.set_facecolor(substrate_color_map[sub_id])
+                patch.set_alpha(0.7)
+
+            # For max mode: also plot scatter points with substrate colors (since boxes show as single points)
+            if agg_method == "max":
+                for i, (vals, sub_id) in enumerate(zip(series, substrate_ids)):
+                    x_positions = [i + 1] * len(vals)  # boxplot positions are 1-indexed
+                    self.ax.scatter(x_positions, vals, color=substrate_color_map[sub_id],
+                                   s=100, alpha=0.8, zorder=3, edgecolors='black', linewidths=0.5)
+        else:
+            # When not expanded, color by substrate if combining substrates
+            if self.combine_substrates.get() or (sel == "All"):
+                # For each box, determine substrate color
+                for box_idx, (patch, sub_info) in enumerate(zip(bp['boxes'], substrate_ids)):
+                    if isinstance(sub_info, list):
+                        # For max mode: sub_info is a list of substrate IDs
+                        if len(sub_info) > 0:
+                            # Color by the most common substrate, or first if tie
+                            from collections import Counter
+                            most_common_sub = Counter(sub_info).most_common(1)[0][0]
+                            patch.set_facecolor(substrate_color_map[most_common_sub])
+                            patch.set_alpha(0.7)
+                    else:
+                        # For mean mode: need to look up substrate from data
+                        g = expected_groups[box_idx] if box_idx < len(expected_groups) else None
+                        if g is not None:
+                            vals = data_df[data_df[group_col] == g]["substrate"].dropna().astype(int).unique()
+                            if len(vals) > 0:
+                                sub_id = int(vals[0])
+                                patch.set_facecolor(substrate_color_map[sub_id])
+                                patch.set_alpha(0.7)
+
+                # For max mode: also plot scatter points with substrate colors
+                if agg_method == "max":
+                    for i, (vals, sub_info) in enumerate(zip(series, substrate_ids)):
+                        if isinstance(sub_info, list) and len(sub_info) > 0:
+                            # Color each point by its substrate
+                            x_positions = [i + 1] * len(vals)
+                            point_colors = [substrate_color_map[sub_id] for sub_id in sub_info]
+                            self.ax.scatter(x_positions, vals, c=point_colors,
+                                          s=100, alpha=0.8, zorder=3, edgecolors='black', linewidths=0.5)
+            else:
+                # Single substrate selected - use default coloring
+                for patch in bp['boxes']:
+                    patch.set_facecolor('lightblue')
+                    patch.set_alpha(0.7)
+
         self.ax.set_xticks(range(1, len(labels) + 1))
         self.ax.set_xticklabels(labels, rotation=45, ha="right")
         self.ax.set_ylabel(metric)
@@ -1341,7 +1570,8 @@ class JVApp(tk.Tk):
             if g not in pivot.columns: pivot[g] = np.nan
         pivot = pivot[expected_groups].sort_index()
 
-        im = self.ax.imshow(pivot.values, aspect="auto", interpolation="nearest")
+        cmap = self.colormap_choice.get()
+        im = self.ax.imshow(pivot.values, aspect="auto", interpolation="nearest", cmap=cmap)
         self.ax.set_xlabel("Composition " + ("group (G1..G9)" if use_groups else "index (C1..C11)"))
         self.ax.set_ylabel("Substrate")
         self.ax.set_title(f"Heatmap: {agg} {metric}")
@@ -1359,6 +1589,7 @@ class JVApp(tk.Tk):
                     self.ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=8)
 
         self._cbar = self.fig.colorbar(im, ax=self.ax, fraction=0.046, pad=0.04, label=metric)
+        self._apply_axis_limits()
         self.canvas.draw_idle()
 
     def plot_substrate_pixel_map(self):
@@ -1402,7 +1633,8 @@ class JVApp(tk.Tk):
             if 1 <= c <= 11 and 1 <= p <= 6:
                 mat[p-1, c-1] = float(r[metric])
 
-        im = self.ax.imshow(mat, aspect="auto", interpolation="nearest", origin="upper")
+        cmap = self.colormap_choice.get()
+        im = self.ax.imshow(mat, aspect="auto", interpolation="nearest", origin="upper", cmap=cmap)
         self.ax.set_xlabel("Composition (C1..C11)")
         self.ax.set_ylabel("Pixel position (1=thick → 6=thin)")
         self.ax.set_title(f"Substrate S{sub} — {metric} per composition & pixel position")
@@ -1415,8 +1647,103 @@ class JVApp(tk.Tk):
                     self.ax.text(j, i, f"{v:.2f}", ha="center", va="center", fontsize=7)
 
         self._cbar = self.fig.colorbar(im, ax=self.ax, fraction=0.046, pad=0.04, label=metric)
+        self._apply_axis_limits()
         self.canvas.draw_idle()
+
+    def plot_substrate_composition_boxplot(self):
+        """
+        Plot box plots comparing specified substrate-composition combinations.
+        Shows distribution of all pixel measurements (not just mean/max) for each combination.
+        Input format: substrate-composition pairs separated by comma, e.g., "5-3, 2-8, 1-11"
+        """
+        # Parse input
+        input_str = self.sub_comp_selection_var.get().strip()
+        if not input_str:
+            messagebox.showwarning("No selection", "Please enter substrate-composition pairs (e.g., 5-3, 2-8)")
+            return
+
+        # Parse substrate-composition pairs
+        pairs = []
+        invalid_pairs = []
+        for pair_str in input_str.split(","):
+            pair_str = pair_str.strip()
+            if not pair_str:
+                continue
+            # Try to parse as "substrate-composition"
+            parts = pair_str.replace(" ", "").split("-")
+            if len(parts) == 2:
+                try:
+                    substrate = int(parts[0])
+                    composition = int(parts[1])
+                    pairs.append((substrate, composition))
+                except ValueError:
+                    invalid_pairs.append(pair_str)
+            else:
+                invalid_pairs.append(pair_str)
+
+        if invalid_pairs:
+            messagebox.showwarning("Invalid format",
+                f"Invalid pairs: {', '.join(invalid_pairs)}\nExpected format: substrate-composition (e.g., 5-3, 2-8)")
+            return
+
+        if not pairs:
+            messagebox.showwarning("No valid pairs", "No valid substrate-composition pairs found")
+            return
+
+        # Get the data
+        df = self._filtered_df()
+        if df.empty:
+            messagebox.showwarning("No data", "No data available. Load JV data first.")
+            return
+
+        # Get the selected metric
+        metric = self.metric_choice.get()
+
+        # Collect data for each pair
+        labels = []
+        series = []
+        for substrate, composition in pairs:
+            # Filter data for this substrate-composition pair
+            mask = (df["substrate"] == substrate) & (df["composition_index"] == composition)
+            subset = df[mask]
+
+            if subset.empty:
+                print(f"Warning: No data found for Substrate {substrate}, Composition {composition}")
+                continue
+
+            # Get all pixel values (not aggregated)
+            values = subset[metric].dropna().values
+            if len(values) > 0:
+                labels.append(f"S{substrate}-C{composition}")
+                series.append(values)
+
+        if not series:
+            messagebox.showwarning("No data",
+                f"No data found for the specified substrate-composition pairs.\n" +
+                f"Pairs requested: {', '.join([f'S{s}-C{c}' for s, c in pairs])}")
+            return
+
+        # Plot box plots
+        self._reset_axes()
+        bp = self.ax.boxplot(series, showmeans=True, meanline=False, patch_artist=True)
+
+        # Color the boxes using selected colormap
+        cmap = plt.get_cmap(self.colormap_choice.get())
+        colors = cmap(np.linspace(0, 1, len(series)))
+        for patch, color in zip(bp['boxes'], colors):
+            patch.set_facecolor(color)
+
+        self.ax.set_xticks(range(1, len(labels) + 1))
+        self.ax.set_xticklabels(labels, rotation=45, ha="right")
+        self.ax.set_ylabel(metric)
         
+        self.ax.grid(True, which="both", axis="y", alpha=0.3)
+
+        
+
+        self._apply_axis_limits()
+        self.canvas.draw_idle()
+
     # -------------------- Parameter analysis methods --------------------
     def browse_parameter_file(self):
         """Browse for Excel file containing parameter data"""
@@ -1454,6 +1781,11 @@ class JVApp(tk.Tk):
             self.x_param_cb['values'] = all_columns
             self.y_param_cb['values'] = y_axis_options
             self.color_param_cb['values'] = ['None'] + y_axis_options
+
+            # Populate box plot listbox with all columns
+            self.boxplot_columns_listbox.delete(0, tk.END)
+            for col in all_columns:
+                self.boxplot_columns_listbox.insert(tk.END, col)
 
             # Set default parameters
             if numeric_columns:
@@ -1547,6 +1879,14 @@ class JVApp(tk.Tk):
 
         # Try to find common columns for merging (substrate, sample, position, etc.)
         jv_data = self.df_with_flags.copy()
+
+        # Apply forward/reverse filtering
+        if not self.combine_fr.get():
+            keep = []
+            if self.include_forward.get(): keep.append("forward")
+            if self.include_reverse.get(): keep.append("reverse")
+            if keep: jv_data = jv_data[jv_data["direction"].isin(keep)]
+
         param_data = self.parameter_data.copy()
 
         # Common merge strategies
@@ -1604,22 +1944,397 @@ class JVApp(tk.Tk):
         except Exception as e:
             messagebox.showerror("Save failed", f"Could not save plot: {str(e)}")
 
+    def generate_box_plot(self):
+        """Generate box plots for multiple selected columns showing performance metrics"""
+        if self.parameter_data is None:
+            messagebox.showwarning("No data", "Please load Excel data first.")
+            return
+
+        if self.df_with_flags is None or self.df_with_flags.empty:
+            messagebox.showwarning("No JV data", "Please load JV data first.")
+            return
+
+        # Get selected columns from listbox
+        selected_indices = self.boxplot_columns_listbox.curselection()
+        if not selected_indices:
+            messagebox.showwarning("No columns selected", "Please select at least one column (use Ctrl+Click for multiple).")
+            return
+
+        selected_columns = [self.boxplot_columns_listbox.get(i) for i in selected_indices]
+
+        metric = self.boxplot_metric_var.get()
+        include_controls = self.include_controls_var.get()
+        show_mean = self.show_mean_var.get()
+
+        try:
+            # Merge parameter and JV data
+            combined_data = self._merge_parameter_and_jv_data()
+            if combined_data is None or combined_data.empty:
+                messagebox.showerror("Error", "Could not merge parameter and JV data.")
+                return
+
+            # Check if selected columns exist
+            missing_cols = [col for col in selected_columns if col not in combined_data.columns]
+            if missing_cols:
+                messagebox.showerror("Error", f"Columns not found in data: {', '.join(missing_cols)}")
+                return
+
+            # Filter controls if needed
+            if not include_controls:
+                # Identify control rows where all additive columns are zero
+                additive_cols = [col for col in combined_data.columns
+                               if col.endswith('(M)') or col.endswith('(mg/mL)') or
+                               col in ['KI (mg/mL)', 'RbI (M)', 'GSCN (M)']]
+
+                if additive_cols:
+                    # Keep only rows where at least one additive column is non-zero
+                    is_control = combined_data[additive_cols].fillna(0).sum(axis=1) == 0
+                    combined_data = combined_data[~is_control]
+
+            # Prepare data for box plot - collect data for all columns
+            all_plot_data = []
+            all_labels = []
+            all_positions = []
+            all_colors = []
+
+            # Use different colors for different columns
+            column_colors = plt.cm.Set3(np.linspace(0, 1, len(selected_columns)))
+
+            current_position = 1
+            spacing_between_columns = 0.5  # Gap between different column groups
+
+            for col_idx, group_column in enumerate(selected_columns):
+                # Get unique values for the grouping column (excluding zeros unless include_controls is True)
+                if not include_controls:
+                    group_values = sorted([v for v in combined_data[group_column].unique() if v != 0 and not pd.isna(v)])
+                else:
+                    group_values = sorted([v for v in combined_data[group_column].unique() if not pd.isna(v)])
+
+                if len(group_values) == 0:
+                    continue
+
+                # Clean column name for label
+                col_label = group_column.replace(' (M)', '').replace(' (mg/mL)', '')
+
+                for val in group_values:
+                    group_data = combined_data[combined_data[group_column] == val][metric].dropna()
+                    if len(group_data) > 0:
+                        all_plot_data.append(group_data.values)
+                        # Format label with column name and value
+                        val_str = f"{val:.3g}" if isinstance(val, (int, float)) else str(val)
+                        all_labels.append(f"{col_label}\n{val_str}")
+                        all_positions.append(current_position)
+                        all_colors.append(column_colors[col_idx])
+                        current_position += 1
+
+                # Add spacing between different columns
+                current_position += spacing_between_columns
+
+            if len(all_plot_data) == 0:
+                messagebox.showwarning("No data", "No valid data for the selected columns and metric.")
+                return
+
+            # Create the plot
+            self._reset_sweep_axes()
+
+            # Create box plot with custom positions
+            bp = self.sweep_ax.boxplot(all_plot_data, positions=all_positions,
+                                      labels=all_labels, patch_artist=True,
+                                      showmeans=show_mean, widths=0.6,
+                                      meanprops=dict(marker='D', markerfacecolor='red',
+                                                   markeredgecolor='darkred', markersize=6))
+
+            # Color the boxes according to their column
+            for patch, color in zip(bp['boxes'], all_colors):
+                patch.set_facecolor(color)
+                patch.set_alpha(0.7)
+                patch.set_edgecolor('black')
+                patch.set_linewidth(1.5)
+
+            # Add mean values as text if requested
+            if show_mean:
+                for i, data in enumerate(all_plot_data):
+                    mean_val = np.mean(data)
+                    self.sweep_ax.text(all_positions[i], mean_val, f'{mean_val:.2f}',
+                                      ha='center', va='bottom', fontsize=8,
+                                      bbox=dict(boxstyle='round,pad=0.2', facecolor='yellow', alpha=0.6))
+
+            # Labels and title
+            metric_labels = {
+                'Voc': 'Open Circuit Voltage (V)',
+                'Jsc_mAcm2': 'Short Circuit Current Density (mA/cm²)',
+                'FF_pct': 'Fill Factor (%)',
+                'PCE_pct': 'Power Conversion Efficiency (%)'
+            }
+
+            self.sweep_ax.set_xlabel('Parameter Groups', fontsize=12, fontweight='bold')
+            self.sweep_ax.set_ylabel(metric_labels.get(metric, metric), fontsize=12, fontweight='bold')
+
+            # Create title with selected columns
+            col_names_short = [c.replace(' (M)', '').replace(' (mg/mL)', '') for c in selected_columns]
+            title = f'Box Plot Comparison: {metric_labels.get(metric, metric)}\n'
+            title += f"Parameters: {', '.join(col_names_short)}"
+            if not include_controls:
+                title += ' (Controls excluded)'
+            self.sweep_ax.set_title(title, fontsize=13, fontweight='bold')
+
+            self.sweep_ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+            self.sweep_ax.tick_params(axis='x', rotation=45, labelsize=9)
+            self.sweep_ax.tick_params(axis='y', labelsize=10)
+
+            # Add legend to identify columns by color
+            from matplotlib.patches import Patch
+            legend_elements = [Patch(facecolor=column_colors[i], edgecolor='black',
+                                    label=col.replace(' (M)', '').replace(' (mg/mL)', ''), alpha=0.7)
+                             for i, col in enumerate(selected_columns)]
+            self.sweep_ax.legend(handles=legend_elements, loc='best', fontsize=9, framealpha=0.9)
+
+            # Adjust layout
+            self.sweep_fig.tight_layout()
+            self.sweep_canvas.draw_idle()
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to generate box plot:\n{str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def plot_well_comparison(self):
+        """Plot comparison of selected wells with chosen performance metric"""
+        # Parse well IDs from the input
+        well_input = self.well_selection_var.get().strip()
+        if not well_input:
+            messagebox.showwarning("No wells selected", "Please enter well IDs (e.g., A5, B6, C3).")
+            return
+
+        # Split by comma and clean up
+        well_ids = [w.strip().upper() for w in well_input.replace(" ", "").split(",")]
+
+        # Convert well IDs to pixel_ids
+        pixel_ids = []
+        invalid_wells = []
+        for well in well_ids:
+            pixel_id = well_to_pixel_id(well)
+            if pixel_id is not None:
+                pixel_ids.append(pixel_id)
+            else:
+                invalid_wells.append(well)
+
+        if invalid_wells:
+            messagebox.showwarning("Invalid wells", f"Invalid well IDs: {', '.join(invalid_wells)}\nValid format: A1-F11")
+            return
+
+        if not pixel_ids:
+            messagebox.showwarning("No valid wells", "No valid well IDs found.")
+            return
+
+        # Get the selected parameter/metric from y-axis parameter
+        metric = self.y_param_var.get()
+
+        # Build list of valid options: performance metrics + parameter columns
+        valid_metrics = ['Voc', 'Jsc_mAcm2', 'FF_pct', 'PCE_pct']
+        if self.parameter_data is not None:
+            valid_metrics.extend(self.parameter_data.columns.tolist())
+
+        if not metric or metric not in valid_metrics:
+            messagebox.showwarning("Invalid metric", f"Please select a valid parameter from the Y-axis Parameter dropdown.\nAvailable: {', '.join(valid_metrics[:5])}...")
+            return
+
+        # Determine which dataframe to use based on the metric
+        if metric in ['Voc', 'Jsc_mAcm2', 'FF_pct', 'PCE_pct']:
+            # Performance metric from JV data - requires JV data to be loaded
+            if self.df is None or self.df.empty:
+                messagebox.showwarning("No JV data", "Please load JV data first to plot performance metrics.")
+                return
+            data_source = self.df
+        else:
+            # Parameter column from Excel sheet - can work with just parameter_data
+            if self.parameter_data is None:
+                messagebox.showwarning("No parameter data", "Please load Excel parameter sheet first.")
+                return
+
+            # Check if we need to identify which rows correspond to the selected wells
+            # If parameter_data has a 'Well ID' or 'pixel_id' column, use it directly
+            param_df = self.parameter_data.copy()
+
+            # Try to find a well/pixel ID column in parameter data
+            well_col_candidates = ['Well ID', 'well_id', 'Well', 'well', 'WellID', 'Pixel ID', 'pixel_id']
+            well_col = None
+            for col in well_col_candidates:
+                if col in param_df.columns:
+                    well_col = col
+                    break
+
+            if well_col:
+                # Filter parameter data by well IDs
+                filtered_df = param_df[param_df[well_col].isin(well_ids + [w.lower() for w in well_ids])].copy()
+                if filtered_df.empty:
+                    messagebox.showwarning("No data", f"No data found in parameter sheet for wells: {', '.join(well_ids)}")
+                    return
+                # Ensure we have a normalized well_id column
+                filtered_df['well_id'] = filtered_df[well_col].astype(str).str.upper()
+            else:
+                # No well ID column found - use pixel_id directly if available
+                if 'pixel_id' not in param_df.columns:
+                    messagebox.showwarning("Column not found", "Parameter data does not have a 'Well ID' or 'pixel_id' column.\nCannot identify which rows correspond to selected wells.")
+                    return
+                filtered_df = param_df[param_df['pixel_id'].isin(pixel_ids)].copy()
+                if filtered_df.empty:
+                    messagebox.showwarning("No data", f"No data found in parameter sheet for wells: {', '.join(well_ids)}")
+                    return
+                filtered_df['well_id'] = filtered_df['pixel_id'].apply(pixel_id_to_well)
+
+            data_source = filtered_df
+
+        # For JV data source, filter by pixel_ids
+        if metric in ['Voc', 'Jsc_mAcm2', 'FF_pct', 'PCE_pct']:
+            filtered_df = data_source[data_source['pixel_id'].isin(pixel_ids)].copy()
+            if filtered_df.empty:
+                messagebox.showwarning("No data", f"No data found for wells: {', '.join(well_ids)}")
+                return
+            # Add well_id column for plotting
+            filtered_df['well_id'] = filtered_df['pixel_id'].apply(pixel_id_to_well)
+        else:
+            # Already filtered above for parameter data
+            pass
+
+        # Check if metric column exists in the filtered data
+        if metric not in filtered_df.columns:
+            messagebox.showwarning("Column not found", f"Column '{metric}' not found in the data.\nAvailable columns: {', '.join(filtered_df.columns[:10])}...")
+            return
+
+        # Get plot type from the UI
+        plot_type = self.plot_type_var.get()
+
+        # Clear the current plot
+        self.sweep_ax.clear()
+
+        # Create the plot based on plot type
+        try:
+            if plot_type == "bar":
+                self._plot_well_bar(filtered_df, metric, well_ids)
+            elif plot_type == "scatter":
+                self._plot_well_scatter(filtered_df, metric, well_ids)
+            elif plot_type == "line":
+                self._plot_well_line(filtered_df, metric, well_ids)
+            elif plot_type == "box":
+                self._plot_well_box(filtered_df, metric, well_ids)
+            else:
+                # Default to bar plot
+                self._plot_well_bar(filtered_df, metric, well_ids)
+
+            self.sweep_canvas.draw()
+
+        except Exception as e:
+            messagebox.showerror("Plot failed", f"Could not create plot: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def _plot_well_bar(self, df, metric, well_ids):
+        """Create bar plot comparing wells"""
+        # Group by well_id and aggregate (mean)
+        grouped = df.groupby('well_id')[metric].mean().reindex([w.upper() for w in well_ids])
+
+        x_pos = range(len(grouped))
+        self.sweep_ax.bar(x_pos, grouped.values, alpha=0.7, color='steelblue')
+        self.sweep_ax.set_xticks(x_pos)
+        self.sweep_ax.set_xticklabels(grouped.index, rotation=45, ha='right')
+        self.sweep_ax.set_xlabel('Well ID', fontsize=12)
+        self.sweep_ax.set_ylabel(metric, fontsize=12)
+        self.sweep_ax.set_title(f'{metric} Comparison by Well', fontsize=14, fontweight='bold')
+        self.sweep_ax.grid(axis='y', alpha=0.3)
+        self.sweep_fig.tight_layout()
+
+    def _plot_well_scatter(self, df, metric, well_ids):
+        """Create scatter plot comparing wells"""
+        for well_id in [w.upper() for w in well_ids]:
+            well_data = df[df['well_id'] == well_id]
+            if not well_data.empty:
+                x_vals = [well_id] * len(well_data)
+                y_vals = well_data[metric].values
+                self.sweep_ax.scatter(x_vals, y_vals, alpha=0.6, s=100, label=well_id)
+
+        self.sweep_ax.set_xlabel('Well ID', fontsize=12)
+        self.sweep_ax.set_ylabel(metric, fontsize=12)
+        self.sweep_ax.set_title(f'{metric} Comparison by Well', fontsize=14, fontweight='bold')
+        self.sweep_ax.legend()
+        self.sweep_ax.grid(axis='y', alpha=0.3)
+        self.sweep_fig.tight_layout()
+
+    def _plot_well_line(self, df, metric, well_ids):
+        """Create line plot comparing wells"""
+        grouped = df.groupby('well_id')[metric].mean().reindex([w.upper() for w in well_ids])
+
+        self.sweep_ax.plot(range(len(grouped)), grouped.values, marker='o', linewidth=2, markersize=8)
+        self.sweep_ax.set_xticks(range(len(grouped)))
+        self.sweep_ax.set_xticklabels(grouped.index, rotation=45, ha='right')
+        self.sweep_ax.set_xlabel('Well ID', fontsize=12)
+        self.sweep_ax.set_ylabel(metric, fontsize=12)
+        self.sweep_ax.set_title(f'{metric} Comparison by Well', fontsize=14, fontweight='bold')
+        self.sweep_ax.grid(alpha=0.3)
+        self.sweep_fig.tight_layout()
+
+    def _plot_well_box(self, df, metric, well_ids):
+        """Create box plot comparing wells"""
+        data_to_plot = []
+        labels = []
+        for well_id in [w.upper() for w in well_ids]:
+            well_data = df[df['well_id'] == well_id][metric].dropna()
+            if not well_data.empty:
+                data_to_plot.append(well_data.values)
+                labels.append(well_id)
+
+        if data_to_plot:
+            self.sweep_ax.boxplot(data_to_plot, labels=labels)
+            self.sweep_ax.set_xlabel('Well ID', fontsize=12)
+            self.sweep_ax.set_ylabel(metric, fontsize=12)
+            self.sweep_ax.set_title(f'{metric} Distribution by Well', fontsize=14, fontweight='bold')
+            self.sweep_ax.grid(axis='y', alpha=0.3)
+            self.sweep_fig.tight_layout()
+
     def _plot_parameter_scatter(self, data, x_param, y_param, color_param):
         """Create scatter plot of parameter vs performance"""
-        x_values = data[x_param].dropna()
-        y_values = data[y_param].dropna()
+        # Filter data to only include substrate-matched controls for 0 values
+        # Control wells are those with NO additives (all additive columns are 0 or NaN)
+
+        if 'substrate' in data.columns:
+            # Identify additive columns (columns ending with '(M)' or starting with 'excess '/'with ')
+            additive_cols = [col for col in data.columns
+                           if col.endswith('(M)') or col.startswith('excess ') or col.startswith('with ')]
+
+            # Get substrates that have the swept parameter (non-zero x_param)
+            substrates_with_param = data[data[x_param] > 0]['substrate'].unique()
+
+            # Identify control wells: all additive columns are 0 or NaN
+            if additive_cols:
+                is_control = data[additive_cols].fillna(0).sum(axis=1) == 0
+            else:
+                # If no additive columns found, fall back to checking only x_param == 0
+                is_control = data[x_param] == 0
+
+            # Filter data to include:
+            # 1. All samples with non-zero x_param values
+            # 2. Only true control wells (no additives) from substrates that have this parameter
+            filtered_data = data[
+                (data[x_param] > 0) |  # Include all samples with the parameter
+                ((data[x_param] == 0) & is_control & (data['substrate'].isin(substrates_with_param)))  # Only substrate-matched pure controls
+            ].copy()
+        else:
+            filtered_data = data
+
+        x_values = filtered_data[x_param].dropna()
+        y_values = filtered_data[y_param].dropna()
 
         # Align x and y values
-        valid_indices = data[[x_param, y_param]].dropna().index
-        x_values = data.loc[valid_indices, x_param]
-        y_values = data.loc[valid_indices, y_param]
+        valid_indices = filtered_data[[x_param, y_param]].dropna().index
+        x_values = filtered_data.loc[valid_indices, x_param]
+        y_values = filtered_data.loc[valid_indices, y_param]
 
         if len(x_values) == 0:
             self._clear_sweep_ax("No valid data points for selected parameters.")
             return
 
-        if color_param and color_param != 'None' and color_param in data.columns:
-            color_values = data.loc[valid_indices, color_param]
+        if color_param and color_param != 'None' and color_param in filtered_data.columns:
+            color_values = filtered_data.loc[valid_indices, color_param]
             scatter = self.sweep_ax.scatter(x_values, y_values, c=color_values, cmap='viridis', alpha=0.7)
             self.sweep_fig.colorbar(scatter, ax=self.sweep_ax, label=color_param)
         else:
@@ -1632,8 +2347,37 @@ class JVApp(tk.Tk):
 
     def _plot_parameter_line(self, data, x_param, y_param, color_param):
         """Create line plot of parameter vs performance"""
-        # Group by x_param and calculate mean y_param
-        grouped = data.groupby(x_param)[y_param].agg(['mean', 'std']).reset_index()
+        # Filter data to only include substrate-matched controls for 0 values
+        # Control wells are those with NO additives (all additive columns are 0 or NaN)
+
+        if 'substrate' not in data.columns:
+            # Fallback to original behavior if substrate info is missing
+            grouped = data.groupby(x_param)[y_param].agg(['mean', 'std']).reset_index()
+        else:
+            # Identify additive columns (columns ending with '(M)' or starting with 'excess '/'with ')
+            additive_cols = [col for col in data.columns
+                           if col.endswith('(M)') or col.startswith('excess ') or col.startswith('with ')]
+
+            # Get substrates that have the swept parameter (non-zero x_param)
+            substrates_with_param = data[data[x_param] > 0]['substrate'].unique()
+
+            # Identify control wells: all additive columns are 0 or NaN
+            if additive_cols:
+                is_control = data[additive_cols].fillna(0).sum(axis=1) == 0
+            else:
+                # If no additive columns found, fall back to checking only x_param == 0
+                is_control = data[x_param] == 0
+
+            # Filter data to include:
+            # 1. All samples with non-zero x_param values
+            # 2. Only true control wells (no additives) from substrates that have this parameter
+            filtered_data = data[
+                (data[x_param] > 0) |  # Include all samples with the parameter
+                ((data[x_param] == 0) & is_control & (data['substrate'].isin(substrates_with_param)))  # Only substrate-matched pure controls
+            ].copy()
+
+            # Group by x_param and calculate mean y_param
+            grouped = filtered_data.groupby(x_param)[y_param].agg(['mean', 'std']).reset_index()
 
         if grouped.empty:
             self._clear_sweep_ax("No valid data for line plot.")
@@ -1754,16 +2498,32 @@ class JVApp(tk.Tk):
 
     def _plot_parameter_bubble(self, data, x_param, y_param, color_param):
         """Create bubble plot with size based on color parameter"""
-        valid_indices = data[[x_param, y_param]].dropna().index
-        x_values = data.loc[valid_indices, x_param]
-        y_values = data.loc[valid_indices, y_param]
+        # Filter data to only include substrate-matched controls
+        if 'substrate' in data.columns:
+            additive_cols = [col for col in data.columns
+                           if col.endswith('(M)') or col.startswith('excess ') or col.startswith('with ')]
+            substrates_with_param = data[data[x_param] > 0]['substrate'].unique()
+            if additive_cols:
+                is_control = data[additive_cols].fillna(0).sum(axis=1) == 0
+            else:
+                is_control = data[x_param] == 0
+            filtered_data = data[
+                (data[x_param] > 0) |
+                ((data[x_param] == 0) & is_control & (data['substrate'].isin(substrates_with_param)))
+            ].copy()
+        else:
+            filtered_data = data
+
+        valid_indices = filtered_data[[x_param, y_param]].dropna().index
+        x_values = filtered_data.loc[valid_indices, x_param]
+        y_values = filtered_data.loc[valid_indices, y_param]
 
         if len(x_values) == 0:
             self._clear_sweep_ax("No valid data points for selected parameters.")
             return
 
-        if color_param and color_param != 'None' and color_param in data.columns:
-            size_values = data.loc[valid_indices, color_param]
+        if color_param and color_param != 'None' and color_param in filtered_data.columns:
+            size_values = filtered_data.loc[valid_indices, color_param]
             # Normalize sizes to reasonable range (20-200 pixels)
             size_norm = (size_values - size_values.min()) / (size_values.max() - size_values.min()) if size_values.max() != size_values.min() else 0.5
             sizes = 20 + 180 * size_norm
@@ -1782,14 +2542,30 @@ class JVApp(tk.Tk):
         try:
             import seaborn as sns
 
+            # Filter data to only include substrate-matched controls
+            if 'substrate' in data.columns:
+                additive_cols = [col for col in data.columns
+                               if col.endswith('(M)') or col.startswith('excess ') or col.startswith('with ')]
+                substrates_with_param = data[data[x_param] > 0]['substrate'].unique()
+                if additive_cols:
+                    is_control = data[additive_cols].fillna(0).sum(axis=1) == 0
+                else:
+                    is_control = data[x_param] == 0
+                filtered_data = data[
+                    (data[x_param] > 0) |
+                    ((data[x_param] == 0) & is_control & (data['substrate'].isin(substrates_with_param)))
+                ].copy()
+            else:
+                filtered_data = data
+
             # Clear and recreate axes for seaborn
             self._reset_sweep_axes()
 
             # Create violin plot
-            if color_param and color_param != 'None' and color_param in data.columns:
-                sns.violinplot(data=data, x=x_param, y=y_param, hue=color_param, ax=self.sweep_ax)
+            if color_param and color_param != 'None' and color_param in filtered_data.columns:
+                sns.violinplot(data=filtered_data, x=x_param, y=y_param, hue=color_param, ax=self.sweep_ax)
             else:
-                sns.violinplot(data=data, x=x_param, y=y_param, ax=self.sweep_ax)
+                sns.violinplot(data=filtered_data, x=x_param, y=y_param, ax=self.sweep_ax)
 
             self.sweep_ax.set_xlabel(x_param, fontsize=12)
             self.sweep_ax.set_ylabel(y_param, fontsize=12)
@@ -1804,12 +2580,28 @@ class JVApp(tk.Tk):
     def _plot_parameter_box(self, data, x_param, y_param, color_param):
         """Create box plot"""
         try:
+            # Filter data to only include substrate-matched controls
+            if 'substrate' in data.columns:
+                additive_cols = [col for col in data.columns
+                               if col.endswith('(M)') or col.startswith('excess ') or col.startswith('with ')]
+                substrates_with_param = data[data[x_param] > 0]['substrate'].unique()
+                if additive_cols:
+                    is_control = data[additive_cols].fillna(0).sum(axis=1) == 0
+                else:
+                    is_control = data[x_param] == 0
+                filtered_data = data[
+                    (data[x_param] > 0) |
+                    ((data[x_param] == 0) & is_control & (data['substrate'].isin(substrates_with_param)))
+                ].copy()
+            else:
+                filtered_data = data
+
             # Group data for box plot
             grouped_data = []
             labels = []
 
-            for group_val in data[x_param].unique():
-                group_data = data[data[x_param] == group_val][y_param].dropna()
+            for group_val in filtered_data[x_param].unique():
+                group_data = filtered_data[filtered_data[x_param] == group_val][y_param].dropna()
                 if len(group_data) > 0:
                     grouped_data.append(group_data)
                     labels.append(str(group_val))
@@ -1821,7 +2613,7 @@ class JVApp(tk.Tk):
             box_plot = self.sweep_ax.boxplot(grouped_data, labels=labels, patch_artist=True)
 
             # Color boxes if color parameter is specified
-            if color_param and color_param != 'None' and color_param in data.columns:
+            if color_param and color_param != 'None' and color_param in filtered_data.columns:
                 colors = plt.cm.viridis(np.linspace(0, 1, len(box_plot['boxes'])))
                 for patch, color in zip(box_plot['boxes'], colors):
                     patch.set_facecolor(color)
@@ -2323,8 +3115,8 @@ class JVApp(tk.Tk):
                 self.update_sweep_info_display(sweep_id)
             except ValueError:
                 self.selected_sweep_id.set(-1)
-                
-        self.refresh_sweep_plots()
+
+        self.update_parameter_plot()
         
     def update_sweep_info_display(self, sweep_id: int):
         """Update the sweep info text display"""
@@ -2581,35 +3373,35 @@ class JVApp(tk.Tk):
         
         # Clear the plot
         self.jv_ax.clear()
-        
-        # Get the original filtered dataframe
-        filtered_df = self._filtered_df()
-        if filtered_df.empty:
-            self.clear_jv_plot()
-            return
-        
+
         # Collect selected sweeps
         selected_sweeps = []
+
         for item in selected_items:
-            values = self.jv_selection_tree.item(item)["values"]
-            if len(values) >= 6:
-                # Find matching sweep in data (updated for new table format)
-                substrate = int(values[0])
-                pixel_id = int(values[1])
-                comp = int(values[2])
-                # group = int(values[3])  # Skip group column
-                pos = int(values[4])
-                direction = values[5]
-                
+            # Use the iid (dataframe index) to look up the row directly from original df
+            try:
+                df_idx = int(item)
+                if df_idx not in self.df_with_flags.index:
+                    continue
+
+                row = self.df_with_flags.loc[df_idx]
+                substrate = int(row["substrate"])
+                pixel_id = int(row["pixel_id"])
+                comp = int(row["composition_index"])
+                pos = int(row["position_in_composition"])
+                direction = row["direction"]
+
                 # Find the corresponding JVSweep object
                 for sweep in self.data:
-                    if (sweep.substrate == substrate and 
+                    if (sweep.substrate == substrate and
                         sweep.pixel_id == pixel_id and
-                        sweep.composition_index == comp and 
+                        sweep.composition_index == comp and
                         sweep.position_in_composition == pos and
                         sweep.direction == direction):
                         selected_sweeps.append(sweep)
                         break
+            except (ValueError, KeyError):
+                continue
         
         if not selected_sweeps:
             self.clear_jv_plot()
