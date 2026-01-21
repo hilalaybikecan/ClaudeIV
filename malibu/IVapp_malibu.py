@@ -205,34 +205,31 @@ class IVDataAnalyzer:
         # Plot controls frame
         plot_control_frame = ttk.LabelFrame(parent, text="Plot Controls")
         plot_control_frame.pack(fill="x", expand=False, padx=10, pady=5)
-        
-        # Parameter selection
-        param_frame = ttk.Frame(plot_control_frame)
-        param_frame.pack(fill="x", expand=False, padx=5, pady=5)
-        
-        ttk.Label(param_frame, text="Select parameter to plot:").pack(side="left", padx=5)
-        
+
         # Parameters for plotting
-        plot_parameters = ['Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]', 'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]']
-        self.plot_param_combobox = ttk.Combobox(param_frame, values=plot_parameters, width=30, state="readonly")
-        self.plot_param_combobox.pack(side="left", padx=5)
-        self.plot_param_combobox.current(0)  # Select first parameter by default
-        
-        # Y-axis limits frame
-        ylim_frame = ttk.Frame(plot_control_frame)
-        ylim_frame.pack(fill="x", expand=False, padx=5, pady=5)
-        
-        ttk.Label(ylim_frame, text="Y-axis Limits:").pack(side="left", padx=5)
-        
-        ttk.Label(ylim_frame, text="Min:").pack(side="left", padx=(20, 5))
-        self.ymin_entry = ttk.Entry(ylim_frame, width=10)
-        self.ymin_entry.pack(side="left", padx=5)
-        
-        ttk.Label(ylim_frame, text="Max:").pack(side="left", padx=(20, 5))
-        self.ymax_entry = ttk.Entry(ylim_frame, width=10)
-        self.ymax_entry.pack(side="left", padx=5)
-        
-        ttk.Label(ylim_frame, text="(Leave empty for auto)").pack(side="left", padx=5)
+        self.plot_parameters = ['Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]', 'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]']
+
+        # Multi-plot management
+        multiplot_frame = ttk.Frame(plot_control_frame)
+        multiplot_frame.pack(fill="x", expand=False, padx=5, pady=5)
+
+        ttk.Label(multiplot_frame, text="Plots:").pack(side="left", padx=5)
+
+        add_plot_btn = ttk.Button(multiplot_frame, text="Add Plot", command=self.add_plot_slot)
+        add_plot_btn.pack(side="left", padx=5)
+
+        remove_plot_btn = ttk.Button(multiplot_frame, text="Remove Last", command=self.remove_plot_slot)
+        remove_plot_btn.pack(side="left", padx=5)
+
+        # Container for plot parameter selections
+        self.plot_slots_frame = ttk.Frame(plot_control_frame)
+        self.plot_slots_frame.pack(fill="x", expand=False, padx=5, pady=5)
+
+        # Store plot slot widgets
+        self.plot_slots = []
+
+        # Add first plot by default
+        self.add_plot_slot()
         
         # Color palette selection
         color_frame = ttk.Frame(plot_control_frame)
@@ -330,6 +327,46 @@ class IVDataAnalyzer:
         # Frame for the condition plot
         self.condition_plot_frame = ttk.Frame(parent)
         self.condition_plot_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+    def add_plot_slot(self):
+        """Add a new plot slot (max 4)"""
+        if len(self.plot_slots) >= 4:
+            messagebox.showwarning("Maximum Reached", "You can add a maximum of 4 plots.")
+            return
+
+        slot_frame = ttk.Frame(self.plot_slots_frame)
+        slot_frame.pack(fill="x", pady=2)
+
+        ttk.Label(slot_frame, text=f"Plot {len(self.plot_slots) + 1}:").pack(side="left", padx=5)
+
+        param_combo = ttk.Combobox(slot_frame, values=self.plot_parameters, width=20, state="readonly")
+        param_combo.pack(side="left", padx=5)
+        param_combo.current(len(self.plot_slots) % len(self.plot_parameters))  # Different default for each
+
+        # Y-axis limits for this plot
+        ttk.Label(slot_frame, text="Y-min:").pack(side="left", padx=(10, 2))
+        ymin_entry = ttk.Entry(slot_frame, width=8)
+        ymin_entry.pack(side="left", padx=2)
+
+        ttk.Label(slot_frame, text="Y-max:").pack(side="left", padx=(5, 2))
+        ymax_entry = ttk.Entry(slot_frame, width=8)
+        ymax_entry.pack(side="left", padx=2)
+
+        self.plot_slots.append({
+            'frame': slot_frame,
+            'combobox': param_combo,
+            'ymin': ymin_entry,
+            'ymax': ymax_entry
+        })
+
+    def remove_plot_slot(self):
+        """Remove the last plot slot"""
+        if len(self.plot_slots) <= 1:
+            messagebox.showwarning("Minimum Required", "At least one plot is required.")
+            return
+
+        last_slot = self.plot_slots.pop()
+        last_slot['frame'].destroy()
     
     def save_conditions(self):
         """Save conditions data to a JSON file"""
@@ -885,72 +922,110 @@ class IVDataAnalyzer:
         if self.measurements_data.empty or self.conditions_data.empty:
             messagebox.showwarning("Warning", "No data available for plotting.")
             return
-        
-        selected_param = self.plot_param_combobox.get()
-        if not selected_param:
+
+        # Get selected parameters from all plot slots
+        selected_params = []
+        for slot in self.plot_slots:
+            param = slot['combobox'].get()
+            if param:
+                selected_params.append(param)
+
+        if not selected_params:
+            messagebox.showwarning("Warning", "Please select at least one parameter to plot.")
             return
-        
+
         # Prepare data for plotting
         plot_data = self.measurements_data.merge(
-            self.conditions_data, 
-            on='Substrate ID', 
+            self.conditions_data,
+            on='Substrate ID',
             how='inner'
         )
-        
+
         if plot_data.empty:
             messagebox.showwarning("Warning", "No data available after joining measurements with conditions.")
             return
-        
+
         # Clear previous plot
         for widget in self.condition_plot_frame.winfo_children():
             widget.destroy()
-        
-        # Create figure
-        fig, ax = plt.subplots(figsize=(8, 6))
-        
+
+        # Determine grid layout
+        n_plots = len(selected_params)
+        if n_plots == 1:
+            nrows, ncols = 1, 1
+            figsize = (7, 6)
+        elif n_plots == 2:
+            nrows, ncols = 1, 2
+            figsize = (14, 6)
+        elif n_plots == 3:
+            nrows, ncols = 2, 2
+            figsize = (14, 12)
+        else:  # 4 plots
+            nrows, ncols = 2, 2
+            figsize = (14, 12)
+
+        # Create figure with subplots
+        fig, axes = plt.subplots(nrows, ncols, figsize=figsize)
+
+        # Flatten axes array for easier iteration
+        if n_plots == 1:
+            axes = [axes]
+        else:
+            axes = axes.flatten() if n_plots > 2 else axes
+
         # Get the desired condition order
         condition_order = self.get_condition_order(plot_data)
-        
+
         # Get selected color palette
         palette_name = self.color_palette_combobox.get()
         palette = self.color_palettes[palette_name]
-        
-        # Create box plot with the selected palette and custom order
-        sns.boxplot(data=plot_data, x='Condition', y=selected_param, ax=ax, palette=palette, order=condition_order)
-        sns.stripplot(data=plot_data, x='Condition', y=selected_param, color='black', size=5, alpha=0.6, ax=ax, order=condition_order)
-        
-        # Set y-axis limits if provided
-        try:
-            ymin = self.ymin_entry.get().strip()
-            ymax = self.ymax_entry.get().strip()
-            
-            if ymin and ymax:
-                ax.set_ylim(float(ymin), float(ymax))
-            elif ymin:
-                ax.set_ylim(bottom=float(ymin))
-            elif ymax:
-                ax.set_ylim(top=float(ymax))
-        except ValueError:
-            messagebox.showwarning("Warning", "Invalid y-axis limits. Using auto limits.")
-        
-        ax.set_title(f'{selected_param} by Condition')
-        ax.set_xlabel('Condition')
-        ax.set_ylabel(selected_param, fontsize=14)
-        
-        # Add horizontal grid lines only
-        ax.grid(True, axis='y', alpha=0.4, linestyle='--')
-        
-        # Rotate x-axis labels for better readability
-        plt.xticks(rotation=90, fontsize=15)
-        
+
+        # Create each subplot
+        for i, param in enumerate(selected_params):
+            ax = axes[i]
+            slot = self.plot_slots[i]
+
+            # Create box plot with the selected palette and custom order
+            sns.boxplot(data=plot_data, x='Condition', y=param, ax=ax, palette=palette, order=condition_order)
+            sns.stripplot(data=plot_data, x='Condition', y=param, color='black', size=4, alpha=0.6, ax=ax, order=condition_order)
+
+            # Set y-axis limits if provided for this specific plot
+            try:
+                ymin = slot['ymin'].get().strip()
+                ymax = slot['ymax'].get().strip()
+
+                if ymin and ymax:
+                    ax.set_ylim(float(ymin), float(ymax))
+                elif ymin:
+                    ax.set_ylim(bottom=float(ymin))
+                elif ymax:
+                    ax.set_ylim(top=float(ymax))
+            except ValueError:
+                pass  # Use auto limits if invalid
+
+            ax.set_ylabel(param, fontsize=16)
+            ax.set_xlabel('')  # Remove x-axis label completely
+
+            # Add horizontal grid lines only
+            ax.grid(True, axis='y', alpha=0.4, linestyle='--')
+
+            # Set tick parameters with larger labels
+            ax.tick_params(axis='y', labelsize=10)  # Y-axis tick numbers
+
+            # For x-axis (condition names), set horizontal with no rotation
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=16)
+
+        # Hide unused subplots
+        for i in range(n_plots, nrows * ncols):
+            axes[i].set_visible(False)
+
         # Tight layout to ensure everything fits
         plt.tight_layout()
-        
+
         # Save the figure reference and plot data for later use
         self.current_figure = fig
-        self.current_param = selected_param
         self.current_plot_data = plot_data.copy()
-        
+
         # Embed plot in tkinter
         canvas = FigureCanvasTkAgg(fig, master=self.condition_plot_frame)
         canvas.draw()
