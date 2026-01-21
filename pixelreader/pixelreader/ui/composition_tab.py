@@ -152,7 +152,6 @@ class CompositionTabMixin:
         self.df = self._to_dataframe(all_sweeps)
         self.df["group_index"] = self.df["composition_index"].apply(comp_to_group)
         self.df_with_flags = self.df.copy()
-        self.df_with_flags["include"] = True  # Initialize all rows as included
 
         self._populate_substrate_combo()
         self._populate_sweep_filter_combo()
@@ -303,7 +302,7 @@ class CompositionTabMixin:
                 messagebox.showwarning("Remove", "Index must be a number."); return
 
             df = self.df_with_flags
-            mask = pd.Series([True] * len(df), index=df.index)  # All rows are valid now
+            mask = pd.Series([True] * len(df), index=df.index)
             if sub_sel != "All":
                 mask &= (df["substrate"] == int(sub_sel))
             if scope.startswith("Composition"):
@@ -313,8 +312,21 @@ class CompositionTabMixin:
             else:  # Pixel position
                 mask &= (df["position_in_composition"] == idx)
 
-            removed = int(mask.sum())
-            df.loc[mask, "include"] = False
+            indices_to_remove = df.index[mask].tolist()
+            removed = len(indices_to_remove)
+            if removed == 0:
+                info.config(text="No matching rows found")
+                return
+
+            # Physical deletion from all data structures
+            self.df_with_flags = self.df_with_flags.drop(indices_to_remove).reset_index(drop=True)
+            if self.df is not None:
+                self.df = self.df.drop(indices_to_remove).reset_index(drop=True)
+            # Remove from self.data in reverse order to maintain index validity
+            for i in sorted(indices_to_remove, reverse=True):
+                if i < len(self.data):
+                    self.data.pop(i)
+
             info.config(text=f"Removed: {removed} rows")
             self.refresh_table(); self.refresh_plots()
 
@@ -498,7 +510,6 @@ class CompositionTabMixin:
         self.df = pd.DataFrame(rows)
         self.df["group_index"] = self.df["composition_index"].apply(comp_to_group)
         self.df_with_flags = self.df.copy()
-        self.df_with_flags["include"] = True  # Initialize all rows as included
         self._populate_substrate_combo()
         self._populate_sweep_filter_combo()
         self.refresh_table(); self.refresh_plots()

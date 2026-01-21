@@ -174,10 +174,6 @@ class PlotTabMixin:
         if self.df_with_flags is None: return pd.DataFrame()
         df = self.df_with_flags.copy()
 
-        # Apply threshold filtering using "include" column
-        if "include" in df.columns:
-            df = df[df["include"]]
-
         # Apply sweep filter
         sweep_filter = self.selected_sweep_filter.get()
         if sweep_filter != "All" and "sweep_id" in df.columns:
@@ -798,7 +794,13 @@ class PlotTabMixin:
                 
 
     def _merge_parameter_and_jv_data(self):
-        """Merge parameter data with JV data"""
+        """Merge parameter data with JV data.
+
+        The runsheet format has 11 rows per substrate, where the row index within
+        each substrate group (0-10) corresponds to composition_index (1-11).
+        This function creates a composition_index column in the parameter data
+        and merges on both substrate and composition_index.
+        """
         if self.parameter_data is None or self.df_with_flags is None:
             return None
 
@@ -814,42 +816,64 @@ class PlotTabMixin:
 
         param_data = self.parameter_data.copy()
 
-        # Common merge strategies
-        merge_columns = []
-
-        # Strategy 1: Try 'substrate' column
-        if 'substrate' in jv_data.columns and 'substrate' in param_data.columns:
-            merge_columns = ['substrate']
-        elif 'Substrate' in param_data.columns and 'substrate' in jv_data.columns:
+        # Normalize substrate column name
+        if 'Substrate' in param_data.columns and 'substrate' not in param_data.columns:
             param_data = param_data.rename(columns={'Substrate': 'substrate'})
-            merge_columns = ['substrate']
+
+        # Check if we have substrate column for the primary merge strategy
+        if 'substrate' in jv_data.columns and 'substrate' in param_data.columns:
+            # Primary strategy: merge on substrate + composition_index
+            # The runsheet has 11 rows per substrate, where row index within each
+            # substrate group corresponds to composition_index - 1
+
+            # Create composition_index in param_data based on row position within each substrate
+            if 'composition_index' not in param_data.columns:
+                # Calculate composition_index as the 1-based row index within each substrate group
+                param_data = param_data.copy()
+                param_data['composition_index'] = param_data.groupby('substrate').cumcount() + 1
+
+            # Merge on both substrate and composition_index
+            if 'composition_index' in jv_data.columns:
+                try:
+                    combined = jv_data.merge(
+                        param_data,
+                        on=['substrate', 'composition_index'],
+                        how='inner'
+                    )
+                    if not combined.empty:
+                        return combined
+                except Exception:
+                    pass  # Fall through to other strategies
+
+            # Fallback: merge on substrate only (less accurate but may work for some cases)
+            try:
+                combined = jv_data.merge(param_data, on=['substrate'], how='inner')
+                if not combined.empty:
+                    return combined
+            except Exception:
+                pass
 
         # Strategy 2: Try other common identifiers
-        if not merge_columns:
-            for col_jv, col_param in [('substrate', 'Sample'), ('substrate', 'Position'),
-                                     ('pixel_id', 'Pixel'), ('composition_index', 'Composition')]:
-                if col_jv in jv_data.columns and col_param in param_data.columns:
-                    param_data = param_data.rename(columns={col_param: col_jv})
-                    merge_columns = [col_jv]
-                    break
+        for col_jv, col_param in [('substrate', 'Sample'), ('substrate', 'Position'),
+                                 ('pixel_id', 'Pixel'), ('composition_index', 'Composition')]:
+            if col_jv in jv_data.columns and col_param in param_data.columns:
+                param_data_renamed = param_data.rename(columns={col_param: col_jv})
+                try:
+                    combined = jv_data.merge(param_data_renamed, on=[col_jv], how='inner')
+                    if not combined.empty:
+                        return combined
+                except Exception:
+                    continue
 
-        if not merge_columns:
-            # Fallback: try to merge by index if sizes match
-            if len(jv_data) == len(param_data):
-                # Reset indices and merge by position
-                jv_data = jv_data.reset_index(drop=True)
-                param_data = param_data.reset_index(drop=True)
-                combined = pd.concat([jv_data, param_data], axis=1)
-                return combined
-            else:
-                return None
-
-        # Perform the merge
-        try:
-            combined = jv_data.merge(param_data, on=merge_columns, how='inner')
+        # Fallback: try to merge by index if sizes match
+        if len(jv_data) == len(param_data):
+            # Reset indices and merge by position
+            jv_data = jv_data.reset_index(drop=True)
+            param_data = param_data.reset_index(drop=True)
+            combined = pd.concat([jv_data, param_data], axis=1)
             return combined
-        except Exception:
-            return None
+
+        return None
 
 
     def save_parameter_plot(self):
@@ -1069,11 +1093,14 @@ class PlotTabMixin:
 
         # Determine which dataframe to use based on the metric
         if metric in ['Voc', 'Jsc_mAcm2', 'FF_pct', 'PCE_pct']:
-            # Performance metric from JV data - requires JV data to be loaded
-            if self.df is None or self.df.empty:
-                messagebox.showwarning("No JV data", "Please load JV data first to plot performance metrics.")
+            # Performance metric from JV data - respect current filtering/removals
+            data_source = self._filtered_df()
+            if data_source.empty:
+                messagebox.showwarning(
+                    "No JV data",
+                    "No JV data available after filters/removals. Load JV data or adjust filters."
+                )
                 return
-            data_source = self.df
         else:
             # Parameter column from Excel sheet - can work with just parameter_data
             if self.parameter_data is None:
