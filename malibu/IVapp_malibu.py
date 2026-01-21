@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog, messagebox, colorchooser
 import os
 import pandas as pd
 import matplotlib
@@ -18,9 +18,9 @@ class IVDataAnalyzer:
         
         # Main data storage
         self.measurements_data = pd.DataFrame(columns=[
-            'Filename', 'Substrate ID', 'Pixel', 'Scan Direction', 
-            'Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]', 
-            'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]', 'Filepath'
+            'Filename', 'Substrate ID', 'Pixel', 'Scan Direction',
+            'Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]',
+            'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]', 'Cell Area [cm2]', 'Filepath'
         ])
         
         # Persistent copy for display sorting (never modified directly)
@@ -100,9 +100,9 @@ class IVDataAnalyzer:
         measurements_frame.pack(fill="both", expand=True, padx=10, pady=5)
         
         # Create treeview for measurements data
-        columns = ('Filename', 'Substrate ID', 'Pixel', 'Scan Direction', 
-                  'Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]', 
-                  'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]')
+        columns = ('Filename', 'Substrate ID', 'Pixel', 'Scan Direction',
+                  'Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]',
+                  'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]', 'Cell Area [cm2]')
         self.display_columns = columns
         
         self.measurements_tree = ttk.Treeview(measurements_frame, columns=self.display_columns, show='headings')
@@ -234,17 +234,25 @@ class IVDataAnalyzer:
         # Color palette selection
         color_frame = ttk.Frame(plot_control_frame)
         color_frame.pack(fill="x", expand=False, padx=5, pady=5)
-        
+
         ttk.Label(color_frame, text="Color Palette:").pack(side="left", padx=5)
-        
+
         self.color_palette_combobox = ttk.Combobox(
-            color_frame, 
-            values=list(self.color_palettes.keys()), 
-            width=20, 
+            color_frame,
+            values=list(self.color_palettes.keys()),
+            width=20,
             state="readonly"
         )
         self.color_palette_combobox.pack(side="left", padx=5)
         self.color_palette_combobox.current(0)  # Select default palette
+        self.color_palette_combobox.bind("<<ComboboxSelected>>", self.on_color_mode_change)
+
+        # Manual color selection button
+        self.manual_colors_btn = ttk.Button(color_frame, text="Manual Colors", command=self.open_manual_color_picker)
+        self.manual_colors_btn.pack(side="left", padx=5)
+
+        # Store manual color selections
+        self.manual_colors = {}  # {condition_name: color_hex}
         
         # X-axis ordering selection
         xorder_frame = ttk.Frame(plot_control_frame)
@@ -502,6 +510,16 @@ class IVDataAnalyzer:
         # Extract substrate ID
         substrate_id_match = re.search(r'Deposition ID:\s*([A-Za-z0-9_]+)', content)
         substrate_id = substrate_id_match.group(1) if substrate_id_match else 'Unknown'
+
+        # Extract cell area (in m2, convert to cm2)
+        cell_area_cm2 = None
+        area_match = re.search(r'Cell size \[m2\]:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)', content)
+        if area_match:
+            try:
+                area_m2 = float(area_match.group(1))
+                cell_area_cm2 = area_m2 * 10000  # Convert m² to cm²
+            except:
+                cell_area_cm2 = None
         
         # Extract measurement data
         data_section_match = re.search(r'% MEASURED IV FRLOOP DATA.*?\nV \(measured\) \[V\].*?\n(.*?)$', content, re.DOTALL)
@@ -546,6 +564,7 @@ class IVDataAnalyzer:
             'Pixel': pixel,
             'Scan Direction': scan_direction,
             'Scan Speed [V/s]': scan_speed,
+            'Cell Area [cm2]': cell_area_cm2,
             'Filepath': filepath,
             **analysis_outputs
         }
@@ -892,11 +911,102 @@ class IVDataAnalyzer:
             pass  # Ignore errors in auto-load
         return []
     
+    def on_color_mode_change(self, event=None):
+        """Handle color palette combobox change"""
+        # Reset manual colors if switching to a preset palette
+        palette_name = self.color_palette_combobox.get()
+        if palette_name != "Manual":
+            # Keep manual colors stored but not in use
+            pass
+
+    def open_manual_color_picker(self):
+        """Open a dialog to manually assign colors to each condition"""
+        if self.measurements_data.empty or self.conditions_data.empty:
+            messagebox.showwarning("Warning", "Please load data and assign conditions first.")
+            return
+
+        # Get unique conditions
+        plot_data = self.measurements_data.merge(
+            self.conditions_data,
+            on='Substrate ID',
+            how='inner'
+        )
+
+        if plot_data.empty:
+            messagebox.showwarning("Warning", "No conditions available for color assignment.")
+            return
+
+        unique_conditions = sorted(plot_data['Condition'].unique())
+
+        # Create a new window for color selection
+        color_window = tk.Toplevel(self.root)
+        color_window.title("Manual Color Selection")
+        color_window.geometry("400x500")
+
+        ttk.Label(color_window, text="Assign colors to each condition:", font=('Arial', 12, 'bold')).pack(pady=10)
+
+        # Create a scrollable frame
+        canvas = tk.Canvas(color_window)
+        scrollbar = ttk.Scrollbar(color_window, orient="vertical", command=canvas.yview)
+        scrollable_frame = ttk.Frame(canvas)
+
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Store color buttons for each condition
+        color_buttons = {}
+
+        def choose_color(condition, btn):
+            """Open color chooser and update button"""
+            current_color = self.manual_colors.get(condition, "#1f77b4")
+            color = colorchooser.askcolor(title=f"Choose color for {condition}", initialcolor=current_color)
+            if color[1]:  # color[1] is the hex value
+                self.manual_colors[condition] = color[1]
+                btn.configure(bg=color[1])
+
+        # Create a row for each condition
+        for condition in unique_conditions:
+            row_frame = ttk.Frame(scrollable_frame)
+            row_frame.pack(fill="x", padx=10, pady=5)
+
+            # Condition label
+            ttk.Label(row_frame, text=condition, width=20).pack(side="left", padx=5)
+
+            # Color preview button
+            current_color = self.manual_colors.get(condition, "#1f77b4")
+            color_btn = tk.Button(row_frame, text="  ", width=3, bg=current_color,
+                                  command=lambda c=condition, b=None: choose_color(c, color_buttons[c]))
+            color_btn.pack(side="left", padx=5)
+            color_buttons[condition] = color_btn
+
+            # Update the button command with the actual button reference
+            color_btn.configure(command=lambda c=condition, b=color_btn: choose_color(c, b))
+
+        canvas.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        scrollbar.pack(side="right", fill="y")
+
+        # Buttons at the bottom
+        button_frame = ttk.Frame(color_window)
+        button_frame.pack(fill="x", padx=10, pady=10)
+
+        def apply_and_close():
+            # Set the palette to use manual colors
+            messagebox.showinfo("Success", "Manual colors saved! Generate plot to see the changes.")
+            color_window.destroy()
+
+        ttk.Button(button_frame, text="Apply", command=apply_and_close).pack(side="right", padx=5)
+        ttk.Button(button_frame, text="Cancel", command=color_window.destroy).pack(side="right", padx=5)
+
     def get_condition_order(self, plot_data):
         """Determine the order of conditions for plotting based on user selection"""
         selected_order = self.xorder_combobox.get()
         unique_conditions = plot_data['Condition'].unique()
-        
+
         if selected_order == "Alphabetical":
             return sorted(unique_conditions)
         elif selected_order == "Custom":
@@ -907,7 +1017,7 @@ class IVDataAnalyzer:
             # Add any remaining conditions not specified in custom order
             remaining_conditions = [c for c in unique_conditions if c not in valid_custom_order]
             return valid_custom_order + sorted(remaining_conditions)
-        
+
         # Default: Display Order (from conditions_data)
         if not self.conditions_data.empty:
             # Sort by display order
@@ -934,8 +1044,29 @@ class IVDataAnalyzer:
             messagebox.showwarning("Warning", "Please select at least one parameter to plot.")
             return
 
-        # Prepare data for plotting
-        plot_data = self.measurements_data.merge(
+        # Use only the data currently displayed in the measurements table
+        # Extract data from the treeview to reflect exactly what the user sees
+        displayed_data = []
+        for item in self.measurements_tree.get_children():
+            values = self.measurements_tree.item(item, 'values')
+            row_dict = {col: values[i] for i, col in enumerate(self.display_columns)}
+            displayed_data.append(row_dict)
+
+        if not displayed_data:
+            messagebox.showwarning("Warning", "No data displayed in measurements table.")
+            return
+
+        displayed_df = pd.DataFrame(displayed_data)
+
+        # Convert numeric columns to proper numeric types
+        numeric_columns = ['Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]',
+                          'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]', 'Cell Area [cm2]']
+        for col in numeric_columns:
+            if col in displayed_df.columns:
+                displayed_df[col] = pd.to_numeric(displayed_df[col], errors='coerce')
+
+        # Prepare data for plotting - merge with conditions
+        plot_data = displayed_df.merge(
             self.conditions_data,
             on='Substrate ID',
             how='inner'
@@ -976,9 +1107,15 @@ class IVDataAnalyzer:
         # Get the desired condition order
         condition_order = self.get_condition_order(plot_data)
 
-        # Get selected color palette
+        # Get selected color palette or use manual colors
         palette_name = self.color_palette_combobox.get()
-        palette = self.color_palettes[palette_name]
+
+        # Check if we have manual colors defined and use them, otherwise use selected palette
+        if self.manual_colors:
+            # Use manual colors - create a palette dictionary for the conditions in order
+            palette = {condition: self.manual_colors.get(condition, "#1f77b4") for condition in condition_order}
+        else:
+            palette = self.color_palettes[palette_name]
 
         # Create each subplot
         for i, param in enumerate(selected_params):
@@ -1003,7 +1140,7 @@ class IVDataAnalyzer:
             except ValueError:
                 pass  # Use auto limits if invalid
 
-            ax.set_ylabel(param, fontsize=16)
+            ax.set_ylabel(param, fontsize=20)
             ax.set_xlabel('')  # Remove x-axis label completely
 
             # Add horizontal grid lines only
@@ -1012,8 +1149,8 @@ class IVDataAnalyzer:
             # Set tick parameters with larger labels
             ax.tick_params(axis='y', labelsize=10)  # Y-axis tick numbers
 
-            # For x-axis (condition names), set horizontal with no rotation
-            plt.setp(ax.xaxis.get_majorticklabels(), rotation=0, ha='center', fontsize=16)
+            # For x-axis (condition names), set 45-degree angle rotation
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right', fontsize=16)
 
         # Hide unused subplots
         for i in range(n_plots, nrows * ncols):
@@ -1098,7 +1235,7 @@ class IVDataAnalyzer:
                 'Substrate ID', 'Condition', 'Pixel', 'Scan Direction',
                 'Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]',
                 'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]',
-                'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]'
+                'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]', 'Cell Area [cm2]'
             ]
 
             # Filter to only include columns that exist in the data
@@ -1257,6 +1394,16 @@ class IVDataAnalyzer:
         with open(filepath, 'r') as f:
             content = f.read()
 
+        # Extract cell area (labeled as m2 but actually in cm2)
+        cell_area_cm2 = 0.04  # Default fallback
+        area_match = re.search(r'Cell size \[m2\]:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)', content)
+        if area_match:
+            try:
+                # Despite the label saying [m2], the value is actually in cm²
+                cell_area_cm2 = float(area_match.group(1))
+            except:
+                cell_area_cm2 = 0.04
+
         # Extract sweep metadata to compute scan speed (V/s)
         vstart = self.extract_value(content, r'Vstart:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)')
         vend = self.extract_value(content, r'Vend:\s*([-\d\.]+E[+-]\d+|[-\d\.]+)')
@@ -1279,15 +1426,15 @@ class IVDataAnalyzer:
         except Exception:
             scan_speed = None
 
-    
+
         data_section = re.search(    r'% MEASURED IV FRLOOP DATA\s*\nV \(measured\) \[V\]\s+I \(measured\) \[A\].*?\n(.*)', content, re.DOTALL)
 
         if not data_section:
             raise ValueError("Could not find IV data in file.")
-    
+
         data_lines = data_section.group(1).strip().split('\n')
         voltages, currents = [], []
-    
+
         for line in data_lines:
             values = line.split('\t')
             if len(values) >= 2:
@@ -1296,18 +1443,20 @@ class IVDataAnalyzer:
                     currents.append(float(values[1]))
                 except ValueError:
                     continue
-    
-        return pd.DataFrame({'Voltage (V)': voltages, 'Current (A)': currents})
 
-    def convert_to_current_density(self, current_data):
-        """Convert current (A) to current density (mA/cm²) using the area from UI"""
+        return pd.DataFrame({'Voltage (V)': voltages, 'Current (A)': currents, 'Cell Area [cm2]': cell_area_cm2})
+
+    def convert_to_current_density(self, current_data, area_cm2=None):
+        """Convert current (A) to current density (mA/cm²) using provided area or UI area"""
         try:
-            area_cm2 = float(self.iv_area.get())
+            # If area is not provided, try to get from UI
+            if area_cm2 is None:
+                area_cm2 = float(self.iv_area.get())
             if area_cm2 <= 0:
                 return current_data  # Return original if invalid area
-            # Convert A to mA/cm²: (A * 1000 mA/A) / (area in cm²)
+            # Convert A to mA/cm²: (A × 1000) / area_cm²
             return current_data * 1000 / area_cm2
-        except (ValueError, AttributeError):
+        except (ValueError, AttributeError, TypeError):
             return current_data  # Return original if area parsing fails
     
     def plot_iv_curve(self, data):
@@ -1315,8 +1464,9 @@ class IVDataAnalyzer:
             widget.destroy()
 
         fig, ax = plt.subplots(figsize=(6, 6))
-        # Convert current to current density
-        current_density = self.convert_to_current_density(data['Current (A)'])
+        # Convert current to current density using area from file if available
+        area_cm2 = data['Cell Area [cm2]'].iloc[0] if 'Cell Area [cm2]' in data.columns else None
+        current_density = self.convert_to_current_density(data['Current (A)'], area_cm2)
         ax.plot(data['Voltage (V)'], current_density, marker='o', linestyle='-')
         ax.set_title("IV Curve")
         ax.set_xlabel("Voltage (V)", fontsize=12)
@@ -1553,14 +1703,16 @@ class IVDataAnalyzer:
             # FWD
             try:
                 df_fw = self.parse_iv_data_for_plot(fw_row['Filepath'])
-                current_density_fw = self.convert_to_current_density(df_fw['Current (A)'])
+                area_fw = df_fw['Cell Area [cm2]'].iloc[0] if 'Cell Area [cm2]' in df_fw.columns else None
+                current_density_fw = self.convert_to_current_density(df_fw['Current (A)'], area_fw)
                 ax.plot(df_fw['Voltage (V)'], current_density_fw, linestyle='-', color=base_color, label=f"{subid} | {cond} | FW")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed FW: {e}")
             # REV
             try:
                 df_rv = self.parse_iv_data_for_plot(rv_row['Filepath'])
-                current_density_rv = self.convert_to_current_density(df_rv['Current (A)'])
+                area_rv = df_rv['Cell Area [cm2]'].iloc[0] if 'Cell Area [cm2]' in df_rv.columns else None
+                current_density_rv = self.convert_to_current_density(df_rv['Current (A)'], area_rv)
                 ax.plot(df_rv['Voltage (V)'], current_density_rv, linestyle='--', color=base_color, alpha=0.5, label=f"{subid} | {cond} | RV")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed RV: {e}")
@@ -1659,13 +1811,15 @@ class IVDataAnalyzer:
             base_color = colors[i % len(colors)] if colors else None
             try:
                 df_fw = self.parse_iv_data_for_plot(fw_row['Filepath'])
-                current_density_fw = self.convert_to_current_density(df_fw['Current (A)'])
+                area_fw = df_fw['Cell Area [cm2]'].iloc[0] if 'Cell Area [cm2]' in df_fw.columns else None
+                current_density_fw = self.convert_to_current_density(df_fw['Current (A)'], area_fw)
                 ax.plot(df_fw['Voltage (V)'], current_density_fw, linestyle='-', color=base_color, label=f"{subid} | {cond} | FW")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed FW: {e}")
             try:
                 df_rv = self.parse_iv_data_for_plot(rv_row['Filepath'])
-                current_density_rv = self.convert_to_current_density(df_rv['Current (A)'])
+                area_rv = df_rv['Cell Area [cm2]'].iloc[0] if 'Cell Area [cm2]' in df_rv.columns else None
+                current_density_rv = self.convert_to_current_density(df_rv['Current (A)'], area_rv)
                 ax.plot(df_rv['Voltage (V)'], current_density_rv, linestyle='--', color=base_color, alpha=0.5, label=f"{subid} | {cond} | RV")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed RV: {e}")
@@ -1716,7 +1870,8 @@ class IVDataAnalyzer:
             for suf, part in parts:
                 is_rv = ('RV' in suf) or ('rv' in suf)
                 label = f"{subid or ''} | {cond} | {'RV' if is_rv else 'FW'}"
-                current_density = self.convert_to_current_density(part['Current (A)'])
+                area_cm2 = part['Cell Area [cm2]'].iloc[0] if 'Cell Area [cm2]' in part.columns else None
+                current_density = self.convert_to_current_density(part['Current (A)'], area_cm2)
                 if is_rv:
                     ax.plot(part['Voltage (V)'], current_density, linestyle='--', color=base_color, alpha=0.5, label=label)
                 else:

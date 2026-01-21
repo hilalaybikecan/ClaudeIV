@@ -602,6 +602,12 @@ class JVApp(tk.Tk):
         self.y_min_var = tk.StringVar(value="")
         self.y_max_var = tk.StringVar(value="")
 
+        # Figure size and font controls for tab1
+        self.comp_fig_width = tk.StringVar(value="8")
+        self.comp_fig_height = tk.StringVar(value="5")
+        self.comp_title_fontsize = tk.StringVar(value="12")
+        self.comp_axis_fontsize = tk.StringVar(value="10")
+
         # Filters
 
         # Header regex (restored)
@@ -648,26 +654,33 @@ class JVApp(tk.Tk):
         self.notebook = ttk.Notebook(self)
         self.notebook.grid(row=0, column=0, columnspan=2, sticky="nsew")
         
-        # Tab 1: Original composition analysis
+        # Tab 1: Original composition analysis (data table only)
         self.comp_frame = ttk.Frame(self.notebook, padding=8)
-        self.notebook.add(self.comp_frame, text="Composition Analysis")
-        
-        # Tab 2: Sweep-based analysis
+        self.notebook.add(self.comp_frame, text="Data Table")
+
+        # Tab 2: Plot Settings and Visualization
+        self.plot_frame = ttk.Frame(self.notebook, padding=8)
+        self.notebook.add(self.plot_frame, text="Plot Settings")
+
+        # Tab 3: Sweep-based analysis
         self.sweep_frame = ttk.Frame(self.notebook, padding=8)
         self.notebook.add(self.sweep_frame, text="Sweep Analysis")
-        
-        # Tab 3: JV Curve visualization
+
+        # Tab 4: JV Curve visualization
         self.jv_frame = ttk.Frame(self.notebook, padding=8)
         self.notebook.add(self.jv_frame, text="JV Curves")
 
         self._build_composition_tab()
+        self._build_plot_tab()
         self._build_sweep_tab()
         self._build_jv_tab()
         
     def _build_composition_tab(self):
-        self.comp_frame.columnconfigure(0, weight=0); self.comp_frame.columnconfigure(1, weight=1)
+        """Build the Data Table tab - only data loading and table viewing"""
+        self.comp_frame.columnconfigure(0, weight=1)
         self.comp_frame.rowconfigure(0, weight=1)
 
+        # Left sidebar for data loading and parameters
         side = ttk.Frame(self.comp_frame, padding=8); side.grid(row=0, column=0, sticky="ns")
 
         ttk.Label(side, text="Data files").grid(row=0, column=0, sticky="w")
@@ -684,77 +697,19 @@ class JVApp(tk.Tk):
         ttk.Button(pfrm, text="Recompute metrics", command=self.recompute_metrics).grid(row=2, column=0, columnspan=2, sticky="ew", pady=4)
 
         ttk.Separator(side).grid(row=6, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Sweep filter").grid(row=7, column=0, sticky="w")
-        self.sweep_filter_cb = ttk.Combobox(side, textvariable=self.selected_sweep_filter, values=["All"], state="readonly", width=12)
-        self.sweep_filter_cb.grid(row=8, column=0, sticky="ew", pady=2)
-        self.sweep_filter_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+        ttk.Button(side, text="Remove items…", command=self.open_remove_dialog).grid(row=7, column=0, sticky="ew")
 
-        ttk.Label(side, text="Include sweeps").grid(row=9, column=0, sticky="w", pady=(6, 0))
-        self.fwd_cb = ttk.Checkbutton(side, text="Forward", variable=self.include_forward, command=self.refresh_plots)
-        self.fwd_cb.grid(row=10, column=0, sticky="w")
-        self.rev_cb = ttk.Checkbutton(side, text="Reverse", variable=self.include_reverse, command=self.refresh_plots)
-        self.rev_cb.grid(row=11, column=0, sticky="w")
+        ttk.Separator(side).grid(row=8, column=0, sticky="ew", pady=6)
+        ttk.Label(side, text="Header regex").grid(row=9, column=0, sticky="w")
+        ttk.Entry(side, textvariable=self.header_pattern_var, width=38).grid(row=10, column=0, sticky="ew", pady=2)
+        ttk.Button(side, text="Reload last folder/file", command=self.reload_last).grid(row=11, column=0, sticky="ew", pady=2)
+        ttk.Button(side, text="Parse report", command=self.show_parse_report).grid(row=12, column=0, sticky="ew", pady=2)
 
-        ttk.Separator(side).grid(row=12, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Metric").grid(row=13, column=0, sticky="w")
-        metric_cb = ttk.Combobox(side, textvariable=self.metric_choice, values=["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"], state="readonly", width=12)
-        metric_cb.grid(row=14, column=0, sticky="ew"); metric_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
-
-        ttk.Label(side, text="Aggregation").grid(row=15, column=0, sticky="w", pady=(4, 0))
-        agg_cb = ttk.Combobox(side, textvariable=self.aggregation_method, values=["mean", "max"], state="readonly", width=12)
-        agg_cb.grid(row=16, column=0, sticky="ew"); agg_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
-
-        ttk.Separator(side).grid(row=17, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Substrate / Grouping").grid(row=18, column=0, sticky="w")
-        self.substrate_cb = ttk.Combobox(side, values=["All"], state="readonly")
-        self.substrate_cb.grid(row=19, column=0, sticky="ew", pady=2); self.substrate_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
-        ttk.Checkbutton(side, text="Combine substrates", variable=self.combine_substrates, command=self.refresh_plots).grid(row=20, column=0, sticky="w")
-        ttk.Checkbutton(side, text="Combine F & R", variable=self.combine_fr, command=self.on_combine_fr_changed).grid(row=21, column=0, sticky="w")
-        ttk.Label(side, text="Grouping").grid(row=22, column=0, sticky="w", pady=(6, 0))
-        grp_cb = ttk.Combobox(side, textvariable=self.grouping_mode, values=["11 compositions", "9 groups"], state="readonly", width=18)
-        grp_cb.grid(row=23, column=0, sticky="ew", pady=2); grp_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
-        ttk.Checkbutton(side, text="Expand x-axis by substrate", variable=self.expand_substrate_axis, command=self.refresh_plots).grid(row=24, column=0, sticky="w", pady=(2, 6))
-
-        ttk.Separator(side).grid(row=25, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Plot Options").grid(row=26, column=0, sticky="w")
-        ttk.Label(side, text="Colormap:").grid(row=27, column=0, sticky="w", pady=(2, 0))
-        colormap_cb = ttk.Combobox(side, textvariable=self.colormap_choice,
-                                    values=["viridis", "plasma", "inferno", "magma", "cividis", "coolwarm", "RdYlGn", "RdYlBu"],
-                                    state="readonly", width=12)
-        colormap_cb.grid(row=28, column=0, sticky="ew")
-        colormap_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
-
-        ttk.Label(side, text="Axis Limits (optional):").grid(row=29, column=0, sticky="w", pady=(4, 0))
-        axis_frame = ttk.Frame(side)
-        axis_frame.grid(row=30, column=0, sticky="ew")
-        ttk.Label(axis_frame, text="X min:").grid(row=0, column=0, sticky="w")
-        ttk.Entry(axis_frame, textvariable=self.x_min_var, width=6).grid(row=0, column=1, sticky="w", padx=2)
-        ttk.Label(axis_frame, text="max:").grid(row=0, column=2, sticky="w")
-        ttk.Entry(axis_frame, textvariable=self.x_max_var, width=6).grid(row=0, column=3, sticky="w", padx=2)
-        ttk.Label(axis_frame, text="Y min:").grid(row=1, column=0, sticky="w")
-        ttk.Entry(axis_frame, textvariable=self.y_min_var, width=6).grid(row=1, column=1, sticky="w", padx=2)
-        ttk.Label(axis_frame, text="max:").grid(row=1, column=2, sticky="w")
-        ttk.Entry(axis_frame, textvariable=self.y_max_var, width=6).grid(row=1, column=3, sticky="w", padx=2)
-        ttk.Button(side, text="Apply limits", command=self.refresh_plots).grid(row=31, column=0, sticky="ew", pady=2)
-        ttk.Button(side, text="Clear limits", command=self.clear_axis_limits).grid(row=32, column=0, sticky="ew", pady=2)
-
-        ttk.Separator(side).grid(row=33, column=0, sticky="ew", pady=6)
-        ttk.Button(side, text="Remove items…", command=self.open_remove_dialog).grid(row=34, column=0, sticky="ew")
-
-        ttk.Separator(side).grid(row=35, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Header regex").grid(row=36, column=0, sticky="w")
-        ttk.Entry(side, textvariable=self.header_pattern_var, width=38).grid(row=37, column=0, sticky="ew", pady=2)
-        ttk.Button(side, text="Reload last folder/file", command=self.reload_last).grid(row=38, column=0, sticky="ew", pady=2)
-        ttk.Button(side, text="Parse report", command=self.show_parse_report).grid(row=39, column=0, sticky="ew", pady=2)
-
-        # Right panel
+        # Right panel - Just the data table
         right = ttk.Frame(self.comp_frame, padding=8); right.grid(row=0, column=1, sticky="nsew")
-        right.rowconfigure(0, weight=1); right.rowconfigure(1, weight=1); right.columnconfigure(0, weight=1)
+        right.rowconfigure(0, weight=1); right.columnconfigure(0, weight=1)
 
-        self.canvas = FigureCanvasTkAgg(self.fig, master=right)
-        self.canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
-
-        table_frame = ttk.Frame(right); table_frame.grid(row=1, column=0, sticky="nsew"); right.rowconfigure(1, weight=1)
+        table_frame = ttk.Frame(right); table_frame.grid(row=0, column=0, sticky="nsew")
         columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="extended")
         for c in columns:
@@ -770,24 +725,142 @@ class JVApp(tk.Tk):
 
         btns = ttk.Frame(table_frame); btns.grid(row=2, column=0, sticky="ew", pady=4)
         ttk.Button(btns, text="Remove Selected", command=self.remove_selected).grid(row=0, column=0, padx=2)
-        ttk.Button(btns, text="Export table CSV", command=self.export_table_csv).grid(row=0, column=3, padx=2)
+        ttk.Button(btns, text="Export table CSV", command=self.export_table_csv).grid(row=0, column=1, padx=2)
 
-        plot_btns = ttk.Frame(right); plot_btns.grid(row=2, column=0, sticky="ew", pady=4)
+    def _build_plot_tab(self):
+        """Build the Plot Settings tab with all plotting controls and figure"""
+        self.plot_frame.columnconfigure(0, weight=0); self.plot_frame.columnconfigure(1, weight=1)
+        self.plot_frame.rowconfigure(0, weight=1)
+
+        # Left panel - All plotting controls
+        plot_left = ttk.Frame(self.plot_frame, padding=8); plot_left.grid(row=0, column=0, sticky="ns")
+
+        ttk.Label(plot_left, text="Filtering").grid(row=0, column=0, sticky="w")
+        ttk.Label(plot_left, text="Sweep filter").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        self.sweep_filter_cb = ttk.Combobox(plot_left, textvariable=self.selected_sweep_filter, values=["All"], state="readonly", width=12)
+        self.sweep_filter_cb.grid(row=2, column=0, sticky="ew", pady=2)
+        self.sweep_filter_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+
+        ttk.Label(plot_left, text="Include sweeps").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self.fwd_cb = ttk.Checkbutton(plot_left, text="Forward", variable=self.include_forward, command=self.refresh_plots)
+        self.fwd_cb.grid(row=4, column=0, sticky="w")
+        self.rev_cb = ttk.Checkbutton(plot_left, text="Reverse", variable=self.include_reverse, command=self.refresh_plots)
+        self.rev_cb.grid(row=5, column=0, sticky="w")
+
+        ttk.Separator(plot_left).grid(row=6, column=0, sticky="ew", pady=6)
+        ttk.Label(plot_left, text="Plot Parameters").grid(row=7, column=0, sticky="w")
+        ttk.Label(plot_left, text="Metric:").grid(row=8, column=0, sticky="w", pady=(4, 0))
+        metric_cb = ttk.Combobox(plot_left, textvariable=self.metric_choice, values=["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"], state="readonly", width=12)
+        metric_cb.grid(row=9, column=0, sticky="ew"); metric_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+
+        ttk.Label(plot_left, text="Aggregation:").grid(row=10, column=0, sticky="w", pady=(4, 0))
+        agg_cb = ttk.Combobox(plot_left, textvariable=self.aggregation_method, values=["mean", "max"], state="readonly", width=12)
+        agg_cb.grid(row=11, column=0, sticky="ew"); agg_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+
+        ttk.Separator(plot_left).grid(row=12, column=0, sticky="ew", pady=6)
+        ttk.Label(plot_left, text="Substrate / Grouping").grid(row=13, column=0, sticky="w")
+        ttk.Label(plot_left, text="Substrate:").grid(row=14, column=0, sticky="w", pady=(4, 0))
+        self.substrate_cb = ttk.Combobox(plot_left, values=["All"], state="readonly")
+        self.substrate_cb.grid(row=15, column=0, sticky="ew", pady=2); self.substrate_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+        ttk.Checkbutton(plot_left, text="Combine substrates", variable=self.combine_substrates, command=self.refresh_plots).grid(row=16, column=0, sticky="w")
+        ttk.Checkbutton(plot_left, text="Combine F & R", variable=self.combine_fr, command=self.on_combine_fr_changed).grid(row=17, column=0, sticky="w")
+        ttk.Label(plot_left, text="Grouping:").grid(row=18, column=0, sticky="w", pady=(6, 0))
+        grp_cb = ttk.Combobox(plot_left, textvariable=self.grouping_mode, values=["11 compositions", "9 groups"], state="readonly", width=18)
+        grp_cb.grid(row=19, column=0, sticky="ew", pady=2); grp_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+        ttk.Checkbutton(plot_left, text="Expand x-axis by substrate", variable=self.expand_substrate_axis, command=self.refresh_plots).grid(row=20, column=0, sticky="w", pady=(2, 6))
+
+        ttk.Separator(plot_left).grid(row=21, column=0, sticky="ew", pady=6)
+        ttk.Label(plot_left, text="Plot Styling").grid(row=22, column=0, sticky="w")
+        ttk.Label(plot_left, text="Colormap:").grid(row=23, column=0, sticky="w", pady=(2, 0))
+        colormap_cb = ttk.Combobox(plot_left, textvariable=self.colormap_choice,
+                                    values=["viridis", "plasma", "inferno", "magma", "cividis", "coolwarm", "RdYlGn", "RdYlBu"],
+                                    state="readonly", width=12)
+        colormap_cb.grid(row=24, column=0, sticky="ew")
+        colormap_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
+
+        ttk.Label(plot_left, text="Axis Limits (optional):").grid(row=25, column=0, sticky="w", pady=(4, 0))
+        axis_frame = ttk.Frame(plot_left)
+        axis_frame.grid(row=26, column=0, sticky="ew")
+        ttk.Label(axis_frame, text="X min:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(axis_frame, textvariable=self.x_min_var, width=6).grid(row=0, column=1, sticky="w", padx=2)
+        ttk.Label(axis_frame, text="max:").grid(row=0, column=2, sticky="w")
+        ttk.Entry(axis_frame, textvariable=self.x_max_var, width=6).grid(row=0, column=3, sticky="w", padx=2)
+        ttk.Label(axis_frame, text="Y min:").grid(row=1, column=0, sticky="w")
+        ttk.Entry(axis_frame, textvariable=self.y_min_var, width=6).grid(row=1, column=1, sticky="w", padx=2)
+        ttk.Label(axis_frame, text="max:").grid(row=1, column=2, sticky="w")
+        ttk.Entry(axis_frame, textvariable=self.y_max_var, width=6).grid(row=1, column=3, sticky="w", padx=2)
+        ttk.Button(plot_left, text="Apply limits", command=self.refresh_plots).grid(row=27, column=0, sticky="ew", pady=2)
+        ttk.Button(plot_left, text="Clear limits", command=self.clear_axis_limits).grid(row=28, column=0, sticky="ew", pady=2)
+
+        ttk.Separator(plot_left).grid(row=29, column=0, sticky="ew", pady=6)
+        ttk.Label(plot_left, text="Figure Size & Fonts").grid(row=30, column=0, sticky="w")
+        figsize_frame = ttk.Frame(plot_left)
+        figsize_frame.grid(row=31, column=0, sticky="ew")
+        ttk.Label(figsize_frame, text="Width:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(figsize_frame, textvariable=self.comp_fig_width, width=6).grid(row=0, column=1, sticky="w", padx=2)
+        ttk.Label(figsize_frame, text="Height:").grid(row=0, column=2, sticky="w")
+        ttk.Entry(figsize_frame, textvariable=self.comp_fig_height, width=6).grid(row=0, column=3, sticky="w", padx=2)
+
+        font_frame = ttk.Frame(plot_left)
+        font_frame.grid(row=32, column=0, sticky="ew")
+        ttk.Label(font_frame, text="Title:").grid(row=0, column=0, sticky="w")
+        ttk.Entry(font_frame, textvariable=self.comp_title_fontsize, width=6).grid(row=0, column=1, sticky="w", padx=2)
+        ttk.Label(font_frame, text="Axis:").grid(row=0, column=2, sticky="w")
+        ttk.Entry(font_frame, textvariable=self.comp_axis_fontsize, width=6).grid(row=0, column=3, sticky="w", padx=2)
+
+        ttk.Button(plot_left, text="Apply Figure Settings", command=self.update_comp_figsize).grid(row=33, column=0, sticky="ew", pady=2)
+
+        ttk.Separator(plot_left).grid(row=34, column=0, sticky="ew", pady=6)
+        ttk.Label(plot_left, text="Substrate-Composition").grid(row=35, column=0, sticky="w")
+        ttk.Label(plot_left, text="Pairs (e.g., 5-3, 2-8):").grid(row=36, column=0, sticky="w", pady=(2, 0))
+        self.sub_comp_selection_var = tk.StringVar(value="")
+        ttk.Entry(plot_left, textvariable=self.sub_comp_selection_var, width=20).grid(row=37, column=0, sticky="ew", pady=2)
+        ttk.Button(plot_left, text="Manual Pixel Plot", command=self.plot_substrate_composition_boxplot).grid(row=38, column=0, sticky="ew")
+
+        # Right panel - Plot display with scrollbars
+        plot_right = ttk.Frame(self.plot_frame, padding=8); plot_right.grid(row=0, column=1, sticky="nsew")
+        plot_right.rowconfigure(0, weight=1); plot_right.columnconfigure(0, weight=1)
+
+        # Create a container frame for the plot with scrollbars
+        plot_container = ttk.Frame(plot_right)
+        plot_container.grid(row=0, column=0, sticky="nsew")
+        plot_container.rowconfigure(0, weight=1)
+        plot_container.columnconfigure(0, weight=1)
+
+        # Create canvas with scrollbars
+        plot_scroll_canvas = tk.Canvas(plot_container, bg='white')
+        plot_scroll_canvas.grid(row=0, column=0, sticky="nsew")
+
+        plot_vsb = ttk.Scrollbar(plot_container, orient="vertical", command=plot_scroll_canvas.yview)
+        plot_vsb.grid(row=0, column=1, sticky="ns")
+        plot_hsb = ttk.Scrollbar(plot_container, orient="horizontal", command=plot_scroll_canvas.xview)
+        plot_hsb.grid(row=1, column=0, sticky="ew")
+
+        plot_scroll_canvas.configure(yscrollcommand=plot_vsb.set, xscrollcommand=plot_hsb.set)
+
+        # Create a frame inside the canvas to hold the matplotlib figure
+        self.plot_inner_frame = ttk.Frame(plot_scroll_canvas)
+        plot_scroll_canvas.create_window((0, 0), window=self.plot_inner_frame, anchor="nw")
+
+        # Create the matplotlib canvas inside the inner frame
+        self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_inner_frame)
+        self.canvas.get_tk_widget().pack()
+
+        # Store the scroll canvas for later use
+        self.plot_scroll_canvas = plot_scroll_canvas
+
+        # Update scroll region when the inner frame changes size
+        def configure_scroll_region(event=None):
+            plot_scroll_canvas.configure(scrollregion=plot_scroll_canvas.bbox("all"))
+
+        self.plot_inner_frame.bind("<Configure>", configure_scroll_region)
+
+        # Plot buttons below the figure
+        plot_btns = ttk.Frame(plot_right); plot_btns.grid(row=1, column=0, sticky="ew", pady=4)
         ttk.Button(plot_btns, text="Boxplot by composition/group", command=self.plot_boxplot_groups).grid(row=0, column=0, padx=4)
         ttk.Button(plot_btns, text="Heatmap (substrate × group)", command=self.plot_heatmap).grid(row=0, column=1, padx=4)
         ttk.Button(plot_btns, text="Substrate pixel map", command=self.plot_substrate_pixel_map).grid(row=0, column=2, padx=4)
         ttk.Button(plot_btns, text="Save plot as image", command=self.save_plot_image).grid(row=0, column=3, padx=4)
-
-        # Add substrate-composition comparison controls
-        comp_compare_frame = ttk.LabelFrame(right, text="Substrate-Composition Comparison", padding=8)
-        comp_compare_frame.grid(row=3, column=0, sticky="ew", pady=(8, 4))
-        ttk.Label(comp_compare_frame, text="Enter substrate-composition pairs (e.g., 5-3, 2-8):").grid(row=0, column=0, sticky="w")
-        self.sub_comp_selection_var = tk.StringVar(value="")
-        ttk.Entry(comp_compare_frame, textvariable=self.sub_comp_selection_var, width=60).grid(row=1, column=0, sticky="ew", padx=(0, 4))
-        comp_compare_btns = ttk.Frame(comp_compare_frame)
-        comp_compare_btns.grid(row=2, column=0, sticky="ew", pady=(4, 0))
-        ttk.Button(comp_compare_btns, text="Manual Pixel Plot", command=self.plot_substrate_composition_boxplot).grid(row=0, column=0, padx=(0, 4))
-        ttk.Button(comp_compare_btns, text="Clear", command=lambda: self.sub_comp_selection_var.set("")).grid(row=0, column=1)
 
         # Initialize the state of forward/reverse checkboxes based on combine_fr
         self.on_combine_fr_changed()
@@ -975,7 +1048,8 @@ class JVApp(tk.Tk):
                         print(f"[AUTO LOAD] Set excel_path_var to: {default_path}")
                 else:
                     print("[AUTO LOAD] No valid paths found")
-        
+    
+    
         all_sweeps = map_sweeps_to_conditions(all_sweeps, self.conditions_df)
         
         # Analyze sweep parameters if conditions were loaded
@@ -1380,6 +1454,35 @@ class JVApp(tk.Tk):
         except Exception as e:
             messagebox.showerror("Save failed", str(e))
 
+    def update_comp_figsize(self):
+        """Update composition plot figure size based on user input"""
+        try:
+            width = float(self.comp_fig_width.get())
+            height = float(self.comp_fig_height.get())
+
+            if width <= 0 or height <= 0:
+                messagebox.showerror("Invalid Size", "Width and height must be positive numbers")
+                return
+
+            # Destroy old canvas widget
+            self.canvas.get_tk_widget().destroy()
+
+            # Update figure size
+            self.fig.set_size_inches(width, height)
+
+            # Create new canvas with updated figure
+            self.canvas = FigureCanvasTkAgg(self.fig, master=self.plot_inner_frame)
+            self.canvas.get_tk_widget().pack()
+
+            # Update scroll region to accommodate new figure size
+            self.plot_inner_frame.update_idletasks()
+            self.plot_scroll_canvas.configure(scrollregion=self.plot_scroll_canvas.bbox("all"))
+
+            # Redraw with current plot
+            self.refresh_plots()
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Please enter valid numbers for width and height")
+
     def refresh_plots(self):
         self.plot_boxplot_groups()
         # Also refresh JV selection table when plots are refreshed
@@ -1387,6 +1490,14 @@ class JVApp(tk.Tk):
             self.refresh_jv_selection_table()
         except AttributeError:
             # JV tab not yet initialized
+            pass
+
+        # Update scroll region after plot refresh
+        try:
+            self.plot_inner_frame.update_idletasks()
+            self.plot_scroll_canvas.configure(scrollregion=self.plot_scroll_canvas.bbox("all"))
+        except AttributeError:
+            # Scroll canvas not yet initialized
             pass
 
     def clear_axis_limits(self):
@@ -1536,12 +1647,21 @@ class JVApp(tk.Tk):
                     patch.set_facecolor('lightblue')
                     patch.set_alpha(0.7)
 
+        # Get font sizes
+        try:
+            title_fontsize = int(self.comp_title_fontsize.get())
+            axis_fontsize = int(self.comp_axis_fontsize.get())
+        except ValueError:
+            title_fontsize = 12
+            axis_fontsize = 10
+
         self.ax.set_xticks(range(1, len(labels) + 1))
-        self.ax.set_xticklabels(labels, rotation=45, ha="right")
-        self.ax.set_ylabel(metric)
+        self.ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=axis_fontsize)
+        self.ax.set_ylabel(metric, fontsize=axis_fontsize)
+        self.ax.tick_params(axis='y', labelsize=axis_fontsize)
         title = f"Boxplot ({agg_method}): {metric} by {'Group' if use_groups else 'Composition'}"
         if self.expand_substrate_axis.get(): title += " (expanded by substrate)"
-        self.ax.set_title(title)
+        self.ax.set_title(title, fontsize=title_fontsize)
         self.ax.grid(True, which="both", axis="y")
         self.canvas.draw_idle()
 
@@ -1570,16 +1690,24 @@ class JVApp(tk.Tk):
             if g not in pivot.columns: pivot[g] = np.nan
         pivot = pivot[expected_groups].sort_index()
 
+        # Get font sizes
+        try:
+            title_fontsize = int(self.comp_title_fontsize.get())
+            axis_fontsize = int(self.comp_axis_fontsize.get())
+        except ValueError:
+            title_fontsize = 12
+            axis_fontsize = 10
+
         cmap = self.colormap_choice.get()
         im = self.ax.imshow(pivot.values, aspect="auto", interpolation="nearest", cmap=cmap)
-        self.ax.set_xlabel("Composition " + ("group (G1..G9)" if use_groups else "index (C1..C11)"))
-        self.ax.set_ylabel("Substrate")
-        self.ax.set_title(f"Heatmap: {agg} {metric}")
-        self.ax.set_xticks(range(pivot.shape[1])); self.ax.set_xticklabels([("G" if use_groups else "C")+str(g) for g in expected_groups])
+        self.ax.set_xlabel("Composition " + ("group (G1..G9)" if use_groups else "index (C1..C11)"), fontsize=axis_fontsize)
+        self.ax.set_ylabel("Substrate", fontsize=axis_fontsize)
+        self.ax.set_title(f"Heatmap: {agg} {metric}", fontsize=title_fontsize)
+        self.ax.set_xticks(range(pivot.shape[1])); self.ax.set_xticklabels([("G" if use_groups else "C")+str(g) for g in expected_groups], fontsize=axis_fontsize)
 
         # Fix substrate axis labels - ensure they correspond to actual substrate numbers in sorted order
         substrate_labels = [str(int(s)) for s in sorted(pivot.index)]
-        self.ax.set_yticks(range(pivot.shape[0])); self.ax.set_yticklabels(substrate_labels)
+        self.ax.set_yticks(range(pivot.shape[0])); self.ax.set_yticklabels(substrate_labels, fontsize=axis_fontsize)
 
         vals = pivot.values
         for i in range(vals.shape[0]):
@@ -1633,13 +1761,21 @@ class JVApp(tk.Tk):
             if 1 <= c <= 11 and 1 <= p <= 6:
                 mat[p-1, c-1] = float(r[metric])
 
+        # Get font sizes
+        try:
+            title_fontsize = int(self.comp_title_fontsize.get())
+            axis_fontsize = int(self.comp_axis_fontsize.get())
+        except ValueError:
+            title_fontsize = 12
+            axis_fontsize = 10
+
         cmap = self.colormap_choice.get()
         im = self.ax.imshow(mat, aspect="auto", interpolation="nearest", origin="upper", cmap=cmap)
-        self.ax.set_xlabel("Composition (C1..C11)")
-        self.ax.set_ylabel("Pixel position (1=thick → 6=thin)")
-        self.ax.set_title(f"Substrate S{sub} — {metric} per composition & pixel position")
-        self.ax.set_xticks(range(11)); self.ax.set_xticklabels([f"C{i}" for i in range(1, 12)], rotation=45, ha="right")
-        self.ax.set_yticks(range(6));  self.ax.set_yticklabels([str(i) for i in range(1, 7)])
+        self.ax.set_xlabel("Composition (C1..C11)", fontsize=axis_fontsize)
+        self.ax.set_ylabel("Pixel position (1=thick → 6=thin)", fontsize=axis_fontsize)
+        self.ax.set_title(f"Substrate S{sub} — {metric} per composition & pixel position", fontsize=title_fontsize)
+        self.ax.set_xticks(range(11)); self.ax.set_xticklabels([f"C{i}" for i in range(1, 12)], rotation=45, ha="right", fontsize=axis_fontsize)
+        self.ax.set_yticks(range(6));  self.ax.set_yticklabels([str(i) for i in range(1, 7)], fontsize=axis_fontsize)
         for i in range(6):
             for j in range(11):
                 v = mat[i, j]
@@ -1733,10 +1869,20 @@ class JVApp(tk.Tk):
         for patch, color in zip(bp['boxes'], colors):
             patch.set_facecolor(color)
 
+        # Get font sizes
+        try:
+            title_fontsize = int(self.comp_title_fontsize.get())
+            axis_fontsize = int(self.comp_axis_fontsize.get())
+        except ValueError:
+            title_fontsize = 12
+            axis_fontsize = 10
+
         self.ax.set_xticks(range(1, len(labels) + 1))
-        self.ax.set_xticklabels(labels, rotation=45, ha="right")
-        self.ax.set_ylabel(metric)
-        
+        self.ax.set_xticklabels(labels, rotation=45, ha="right", fontsize=axis_fontsize)
+        self.ax.set_ylabel(metric, fontsize=axis_fontsize)
+        self.ax.tick_params(axis='y', labelsize=axis_fontsize)
+        self.ax.set_title(f"Substrate-Composition Comparison: {metric}", fontsize=title_fontsize)
+
         self.ax.grid(True, which="both", axis="y", alpha=0.3)
 
         
@@ -3152,11 +3298,16 @@ class JVApp(tk.Tk):
 
     def _build_jv_tab(self):
         """Build the JV curve visualization tab"""
-        self.jv_frame.columnconfigure(0, weight=0); self.jv_frame.columnconfigure(1, weight=1)
         self.jv_frame.rowconfigure(0, weight=1)
+        self.jv_frame.columnconfigure(0, weight=1)
+
+        # Use PanedWindow for resizable layout
+        jv_paned = ttk.PanedWindow(self.jv_frame, orient=tk.HORIZONTAL)
+        jv_paned.grid(row=0, column=0, sticky="nsew")
 
         # Left panel: Sample selection and controls
-        jv_left = ttk.Frame(self.jv_frame, padding=8); jv_left.grid(row=0, column=0, sticky="ns")
+        jv_left = ttk.Frame(jv_paned, padding=8)
+        jv_paned.add(jv_left, weight=0)
         
         # Sample selection from main table
         ttk.Label(jv_left, text="Sample Selection").grid(row=0, column=0, sticky="w")
@@ -3232,27 +3383,43 @@ class JVApp(tk.Tk):
         ttk.Entry(y_limit_frame, textvariable=self.jv_y_max, width=8).grid(row=0, column=3, sticky="w", padx=2)
         
         # Apply axes button
-        ttk.Button(jv_left, text="Apply Axes", 
+        ttk.Button(jv_left, text="Apply Axes",
                   command=self.update_jv_axes).grid(row=12, column=0, sticky="ew", pady=2)
-        
+
+        # Figure size controls
+        ttk.Separator(jv_left).grid(row=13, column=0, sticky="ew", pady=8)
+        ttk.Label(jv_left, text="Figure Size:").grid(row=14, column=0, sticky="w")
+
+        figsize_frame = ttk.Frame(jv_left); figsize_frame.grid(row=15, column=0, sticky="ew")
+        ttk.Label(figsize_frame, text="Width:").grid(row=0, column=0, sticky="w")
+        self.jv_fig_width = tk.StringVar(value="8")
+        ttk.Entry(figsize_frame, textvariable=self.jv_fig_width, width=6).grid(row=0, column=1, sticky="w", padx=2)
+        ttk.Label(figsize_frame, text="Height:").grid(row=0, column=2, sticky="w")
+        self.jv_fig_height = tk.StringVar(value="8")
+        ttk.Entry(figsize_frame, textvariable=self.jv_fig_height, width=6).grid(row=0, column=3, sticky="w", padx=2)
+
+        ttk.Button(jv_left, text="Apply Figure Size",
+                  command=self.update_jv_figsize).grid(row=16, column=0, sticky="ew", pady=2)
+
         # Plot button
-        ttk.Button(jv_left, text="Plot Selected JV Curves", 
-                  command=self.plot_jv_curves).grid(row=13, column=0, sticky="ew", pady=8)
+        ttk.Button(jv_left, text="Plot Selected JV Curves",
+                  command=self.plot_jv_curves).grid(row=17, column=0, sticky="ew", pady=8)
         
         # Clear button
         ttk.Button(jv_left, text="Clear Plot",
-                  command=self.clear_jv_plot).grid(row=14, column=0, sticky="ew")
+                  command=self.clear_jv_plot).grid(row=18, column=0, sticky="ew")
 
         # Save plot button
         ttk.Button(jv_left, text="Save Plot",
-                  command=self.save_jv_plot).grid(row=15, column=0, sticky="ew", pady=2)
+                  command=self.save_jv_plot).grid(row=19, column=0, sticky="ew", pady=2)
         
         # Right panel: JV curve plot
-        jv_right = ttk.Frame(self.jv_frame, padding=8); jv_right.grid(row=0, column=1, sticky="nsew")
+        jv_right = ttk.Frame(jv_paned, padding=8)
+        jv_paned.add(jv_right, weight=1)
         jv_right.rowconfigure(0, weight=1); jv_right.columnconfigure(0, weight=1)
-        
-        # JV plot figure and canvas
-        self.jv_fig = Figure(figsize=(8, 6), dpi=100)
+
+        # JV plot figure and canvas (square aspect ratio)
+        self.jv_fig = Figure(figsize=(8, 8), dpi=100)
         self.jv_ax = self.jv_fig.add_subplot(111)
         self.jv_canvas = FigureCanvasTkAgg(self.jv_fig, master=jv_right)
         self.jv_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
@@ -3461,8 +3628,8 @@ class JVApp(tk.Tk):
                                    linewidth=2, linestyle=linestyle, alpha=alpha)
         
         # Formatting
-        self.jv_ax.set_xlabel("Voltage (V)")
-        self.jv_ax.set_ylabel("Current Density (mA/cm²)")
+        self.jv_ax.set_xlabel("Voltage (V)", fontsize=16)
+        self.jv_ax.set_ylabel("Current Density (mA/cm²)", fontsize=16)
         self.jv_ax.set_title("JV Curves")
         self.jv_ax.grid(True, alpha=0.3)
         self.jv_ax.legend(loc='best')
@@ -3476,8 +3643,8 @@ class JVApp(tk.Tk):
     def clear_jv_plot(self):
         """Clear the JV plot"""
         self.jv_ax.clear()
-        self.jv_ax.set_xlabel("Voltage (V)")
-        self.jv_ax.set_ylabel("Current Density (mA/cm²)")
+        self.jv_ax.set_xlabel("Voltage (V)", fontsize=16)
+        self.jv_ax.set_ylabel("Current Density (mA/cm²)", fontsize=16)
         self.jv_ax.set_title("JV Curves - Select samples to plot")
         self.jv_ax.grid(True, alpha=0.3)
         self.jv_canvas.draw()
@@ -3534,6 +3701,37 @@ class JVApp(tk.Tk):
             self.jv_canvas.draw()
         except Exception as e:
             print(f"Error updating axes: {e}")
+
+    def update_jv_figsize(self):
+        """Update JV plot figure size based on user input"""
+        if not hasattr(self, 'jv_fig') or not hasattr(self, 'jv_canvas'):
+            return
+
+        try:
+            width = float(self.jv_fig_width.get())
+            height = float(self.jv_fig_height.get())
+
+            if width <= 0 or height <= 0:
+                messagebox.showerror("Invalid Size", "Width and height must be positive numbers")
+                return
+
+            # Store the parent widget
+            parent = self.jv_canvas.get_tk_widget().master
+
+            # Destroy old canvas
+            self.jv_canvas.get_tk_widget().destroy()
+
+            # Update figure size
+            self.jv_fig.set_size_inches(width, height)
+
+            # Create new canvas with updated figure
+            self.jv_canvas = FigureCanvasTkAgg(self.jv_fig, master=parent)
+            self.jv_canvas.get_tk_widget().grid(row=0, column=0, sticky="nsew")
+
+            self.jv_fig.tight_layout()
+            self.jv_canvas.draw()
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Please enter valid numbers for width and height")
 
 
 if __name__ == "__main__":
