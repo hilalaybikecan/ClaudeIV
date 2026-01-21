@@ -143,7 +143,7 @@ class JVSweep:
   - `ui/`: Tkinter GUI mixins and app class
     - `app.py`: `JVApp` class (mixes tab modules)
     - `composition_tab.py`: Data loading + table workflows
-    - `plot_tab.py`: Plot controls, composition plots, and parameter plots
+    - `plot_tab.py`: Substrate plots controls and visualization
     - `sweep_tab.py`: Sweep analysis tab + plots
     - `jv_tab.py`: JV curve selection + plotting
 

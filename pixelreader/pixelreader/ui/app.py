@@ -107,9 +107,9 @@ class JVApp(tk.Tk, CompositionTabMixin, PlotTabMixin, SweepTabMixin, JVTabMixin)
         self.comp_frame = ttk.Frame(self.notebook, padding=8)
         self.notebook.add(self.comp_frame, text="Data Table")
 
-        # Tab 2: Plot Settings and Visualization
+        # Tab 2: Substrate Plots and Visualization
         self.plot_frame = ttk.Frame(self.notebook, padding=8)
-        self.notebook.add(self.plot_frame, text="Plot Settings")
+        self.notebook.add(self.plot_frame, text="Substrate Plots")
 
         # Tab 3: Sweep-based analysis
         self.sweep_frame = ttk.Frame(self.notebook, padding=8)

@@ -53,12 +53,12 @@ class CompositionTabMixin:
         right.rowconfigure(0, weight=1); right.columnconfigure(0, weight=1)
 
         table_frame = ttk.Frame(right); table_frame.grid(row=0, column=0, sticky="nsew")
-        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct")
+        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "avPCE_pct")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="extended")
         for c in columns:
             # All columns are now sortable
             self.tree.heading(c, text=c, command=lambda col=c: self.sort_by_column(col))
-            self.tree.column(c, width=90, stretch=True)
+            self.tree.column(c, width=90, stretch=True, anchor="center")
         vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.tree.yview)
         hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self.tree.xview)
         self.tree.configure(yscroll=vsb.set, xscroll=hsb.set)
@@ -350,7 +350,7 @@ class CompositionTabMixin:
         # Map display column names to dataframe column names
         column_map = {
             "substrate": "substrate",
-            "pixel_id": "pixel_id", 
+            "pixel_id": "pixel_id",
             "comp": "composition_index",
             "group": "group_index",
             "pos": "position_in_composition",
@@ -358,7 +358,8 @@ class CompositionTabMixin:
             "Voc": "Voc",
             "Jsc_mAcm2": "Jsc_mAcm2",
             "FF_pct": "FF_pct",
-            "PCE_pct": "PCE_pct"
+            "PCE_pct": "PCE_pct",
+            "avPCE_pct": "avPCE_pct"
         }
         
         if column in column_map:
@@ -376,8 +377,8 @@ class CompositionTabMixin:
 
     def update_column_headers(self):
         """Update column headers to show current sort direction"""
-        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct")
-        
+        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "avPCE_pct")
+
         for c in columns:
             if c == self._sort_column:
                 arrow = " ▼" if self._sort_reverse else " ▲"
@@ -389,6 +390,10 @@ class CompositionTabMixin:
     def refresh_table(self):
         self.tree.delete(*self.tree.get_children())
         if self.df_with_flags is None or self.df_with_flags.empty: return
+
+        # Compute average PCE for each substrate+pixel_id combination
+        self._compute_average_pce()
+
         for idx, r in self.df_with_flags.iterrows():
             vals = (
                 int(r["substrate"]) if pd.notna(r["substrate"]) else "",
@@ -401,8 +406,23 @@ class CompositionTabMixin:
                 None if pd.isna(r["Jsc_mAcm2"]) else round(float(r["Jsc_mAcm2"]), 2),
                 None if pd.isna(r["FF_pct"]) else round(float(r["FF_pct"]), 1),
                 None if pd.isna(r["PCE_pct"]) else round(float(r["PCE_pct"]), 2),
+                None if pd.isna(r.get("avPCE_pct")) else round(float(r["avPCE_pct"]), 2),
             )
             self.tree.insert("", "end", iid=str(idx), values=vals)
+
+    def _compute_average_pce(self):
+        """Compute average PCE for each substrate+pixel_id combination (typically F+R average)"""
+        if self.df_with_flags is None or self.df_with_flags.empty:
+            return
+
+        # Group by substrate and pixel_id to get average PCE
+        avg_pce = self.df_with_flags.groupby(["substrate", "pixel_id"])["PCE_pct"].mean()
+
+        # Map back to the dataframe
+        self.df_with_flags["avPCE_pct"] = self.df_with_flags.apply(
+            lambda row: avg_pce.get((row["substrate"], row["pixel_id"]), np.nan),
+            axis=1
+        )
 
 
     def remove_selected(self):

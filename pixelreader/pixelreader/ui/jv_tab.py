@@ -34,8 +34,8 @@ class JVTabMixin:
         jv_left.columnconfigure(0, weight=1)
         
         # Table showing filtered data for selection (same format as main table)
-        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct")
-        self.jv_selection_tree = ttk.Treeview(selection_frame, columns=columns, show="headings", 
+        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "avPCE_pct")
+        self.jv_selection_tree = ttk.Treeview(selection_frame, columns=columns, show="headings",
                                              selectmode="extended", height=8)
         # Initialize sorting state
         self._jv_sort_column = None
@@ -43,7 +43,7 @@ class JVTabMixin:
         
         for c in columns:
             self.jv_selection_tree.heading(c, text=c, command=lambda col=c: self.sort_jv_by_column(col))
-            self.jv_selection_tree.column(c, width=90, stretch=True)
+            self.jv_selection_tree.column(c, width=90, stretch=True, anchor="center")
         
         # Scrollbars for selection table
         jv_vsb = ttk.Scrollbar(selection_frame, orient="vertical", command=self.jv_selection_tree.yview)
@@ -171,6 +171,7 @@ class JVTabMixin:
                 None if pd.isna(r["Jsc_mAcm2"]) else round(float(r["Jsc_mAcm2"]), 2),
                 None if pd.isna(r["FF_pct"]) else round(float(r["FF_pct"]), 1),
                 None if pd.isna(r["PCE_pct"]) else round(float(r["PCE_pct"]), 2),
+                None if pd.isna(r.get("avPCE_pct")) else round(float(r["avPCE_pct"]), 2),
             )
             # Use dataframe index as item identifier for lookup
             self.jv_selection_tree.insert("", "end", iid=str(idx), values=vals)
@@ -191,7 +192,7 @@ class JVTabMixin:
         # Map display column names to dataframe column names
         column_map = {
             "substrate": "substrate",
-            "pixel_id": "pixel_id", 
+            "pixel_id": "pixel_id",
             "comp": "composition_index",
             "group": "group_index",
             "pos": "position_in_composition",
@@ -199,7 +200,8 @@ class JVTabMixin:
             "Voc": "Voc",
             "Jsc_mAcm2": "Jsc_mAcm2",
             "FF_pct": "FF_pct",
-            "PCE_pct": "PCE_pct"
+            "PCE_pct": "PCE_pct",
+            "avPCE_pct": "avPCE_pct"
         }
         
         if column in column_map:
@@ -233,11 +235,12 @@ class JVTabMixin:
                         None if pd.isna(r["Jsc_mAcm2"]) else round(float(r["Jsc_mAcm2"]), 2),
                         None if pd.isna(r["FF_pct"]) else round(float(r["FF_pct"]), 1),
                         None if pd.isna(r["PCE_pct"]) else round(float(r["PCE_pct"]), 2),
+                        None if pd.isna(r.get("avPCE_pct")) else round(float(r["avPCE_pct"]), 2),
                     )
                     self.jv_selection_tree.insert("", "end", iid=str(idx), values=vals)
-                
+
                 # Update column headers to show sort direction
-                for col in ["substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"]:
+                for col in ["substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "avPCE_pct"]:
                     if col == column:
                         arrow = " ↓" if self._jv_sort_reverse else " ↑"
                         self.jv_selection_tree.heading(col, text=f"{col}{arrow}")

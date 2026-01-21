@@ -21,7 +21,7 @@ from pixelreader.wellmap import pixel_id_to_well, well_to_pixel_id
 
 class PlotTabMixin:
     def _build_plot_tab(self):
-        """Build the Plot Settings tab with all plotting controls and figure"""
+        """Build the Substrate Plots tab with all plotting controls and figure"""
         self.plot_frame.columnconfigure(0, weight=0); self.plot_frame.columnconfigure(1, weight=1)
         self.plot_frame.rowconfigure(0, weight=1)
 
@@ -897,18 +897,16 @@ class PlotTabMixin:
 
     def generate_box_plot(self):
         """Generate box plots for multiple selected columns showing performance metrics"""
+        # Silently return if data isn't ready (allows automatic updates without error dialogs)
         if self.parameter_data is None:
-            messagebox.showwarning("No data", "Please load Excel data first.")
             return
 
         if self.df_with_flags is None or self.df_with_flags.empty:
-            messagebox.showwarning("No JV data", "Please load JV data first.")
             return
 
         # Get selected columns from listbox
         selected_indices = self.boxplot_columns_listbox.curselection()
         if not selected_indices:
-            messagebox.showwarning("No columns selected", "Please select at least one column (use Ctrl+Click for multiple).")
             return
 
         selected_columns = [self.boxplot_columns_listbox.get(i) for i in selected_indices]
@@ -942,6 +940,12 @@ class PlotTabMixin:
                     is_control = combined_data[additive_cols].fillna(0).sum(axis=1) == 0
                     combined_data = combined_data[~is_control]
 
+            # Round numeric columns to avoid floating point precision issues
+            # (e.g., 0.8 vs 0.8000000000000002 being treated as different values)
+            for col in selected_columns:
+                if col in combined_data.columns and pd.api.types.is_numeric_dtype(combined_data[col]):
+                    combined_data[col] = combined_data[col].round(6)
+
             # Prepare data for box plot - collect data for all columns
             all_plot_data = []
             all_labels = []
@@ -955,11 +959,8 @@ class PlotTabMixin:
             spacing_between_columns = 0.5  # Gap between different column groups
 
             for col_idx, group_column in enumerate(selected_columns):
-                # Get unique values for the grouping column (excluding zeros unless include_controls is True)
-                if not include_controls:
-                    group_values = sorted([v for v in combined_data[group_column].unique() if v != 0 and not pd.isna(v)])
-                else:
-                    group_values = sorted([v for v in combined_data[group_column].unique() if not pd.isna(v)])
+                # Get unique values for the grouping column (always include zeros)
+                group_values = sorted([v for v in combined_data[group_column].unique() if not pd.isna(v)])
 
                 if len(group_values) == 0:
                     continue
@@ -1261,28 +1262,10 @@ class PlotTabMixin:
             additive_cols = [col for col in data.columns
                            if col.endswith('(M)') or col.startswith('excess ') or col.startswith('with ')]
 
-            # Get substrates that have the swept parameter (non-zero x_param)
-            substrates_with_param = data[data[x_param] > 0]['substrate'].unique()
-
-            # Identify control wells: all additive columns are 0 or NaN
-            if additive_cols:
-                is_control = data[additive_cols].fillna(0).sum(axis=1) == 0
-            else:
-                # If no additive columns found, fall back to checking only x_param == 0
-                is_control = data[x_param] == 0
-
-            # Filter data to include:
-            # 1. All samples with non-zero x_param values
-            # 2. Only true control wells (no additives) from substrates that have this parameter
-            filtered_data = data[
-                (data[x_param] > 0) |  # Include all samples with the parameter
-                ((data[x_param] == 0) & is_control & (data['substrate'].isin(substrates_with_param)))  # Only substrate-matched pure controls
-            ].copy()
+            # Include all data points (including zero values)
+            filtered_data = data.copy()
         else:
             filtered_data = data
-
-        x_values = filtered_data[x_param].dropna()
-        y_values = filtered_data[y_param].dropna()
 
         # Align x and y values
         valid_indices = filtered_data[[x_param, y_param]].dropna().index
@@ -1308,37 +1291,8 @@ class PlotTabMixin:
 
     def _plot_parameter_line(self, data, x_param, y_param, color_param):
         """Create line plot of parameter vs performance"""
-        # Filter data to only include substrate-matched controls for 0 values
-        # Control wells are those with NO additives (all additive columns are 0 or NaN)
-
-        if 'substrate' not in data.columns:
-            # Fallback to original behavior if substrate info is missing
-            grouped = data.groupby(x_param)[y_param].agg(['mean', 'std']).reset_index()
-        else:
-            # Identify additive columns (columns ending with '(M)' or starting with 'excess '/'with ')
-            additive_cols = [col for col in data.columns
-                           if col.endswith('(M)') or col.startswith('excess ') or col.startswith('with ')]
-
-            # Get substrates that have the swept parameter (non-zero x_param)
-            substrates_with_param = data[data[x_param] > 0]['substrate'].unique()
-
-            # Identify control wells: all additive columns are 0 or NaN
-            if additive_cols:
-                is_control = data[additive_cols].fillna(0).sum(axis=1) == 0
-            else:
-                # If no additive columns found, fall back to checking only x_param == 0
-                is_control = data[x_param] == 0
-
-            # Filter data to include:
-            # 1. All samples with non-zero x_param values
-            # 2. Only true control wells (no additives) from substrates that have this parameter
-            filtered_data = data[
-                (data[x_param] > 0) |  # Include all samples with the parameter
-                ((data[x_param] == 0) & is_control & (data['substrate'].isin(substrates_with_param)))  # Only substrate-matched pure controls
-            ].copy()
-
-            # Group by x_param and calculate mean y_param
-            grouped = filtered_data.groupby(x_param)[y_param].agg(['mean', 'std']).reset_index()
+        # Include all data points (including zero values)
+        grouped = data.groupby(x_param)[y_param].agg(['mean', 'std']).reset_index()
 
         if grouped.empty:
             self._clear_sweep_ax("No valid data for line plot.")
@@ -1462,21 +1416,8 @@ class PlotTabMixin:
 
     def _plot_parameter_bubble(self, data, x_param, y_param, color_param):
         """Create bubble plot with size based on color parameter"""
-        # Filter data to only include substrate-matched controls
-        if 'substrate' in data.columns:
-            additive_cols = [col for col in data.columns
-                           if col.endswith('(M)') or col.startswith('excess ') or col.startswith('with ')]
-            substrates_with_param = data[data[x_param] > 0]['substrate'].unique()
-            if additive_cols:
-                is_control = data[additive_cols].fillna(0).sum(axis=1) == 0
-            else:
-                is_control = data[x_param] == 0
-            filtered_data = data[
-                (data[x_param] > 0) |
-                ((data[x_param] == 0) & is_control & (data['substrate'].isin(substrates_with_param)))
-            ].copy()
-        else:
-            filtered_data = data
+        # Include all data points (including zero values)
+        filtered_data = data.copy()
 
         valid_indices = filtered_data[[x_param, y_param]].dropna().index
         x_values = filtered_data.loc[valid_indices, x_param]
@@ -1507,21 +1448,8 @@ class PlotTabMixin:
         try:
             import seaborn as sns
 
-            # Filter data to only include substrate-matched controls
-            if 'substrate' in data.columns:
-                additive_cols = [col for col in data.columns
-                               if col.endswith('(M)') or col.startswith('excess ') or col.startswith('with ')]
-                substrates_with_param = data[data[x_param] > 0]['substrate'].unique()
-                if additive_cols:
-                    is_control = data[additive_cols].fillna(0).sum(axis=1) == 0
-                else:
-                    is_control = data[x_param] == 0
-                filtered_data = data[
-                    (data[x_param] > 0) |
-                    ((data[x_param] == 0) & is_control & (data['substrate'].isin(substrates_with_param)))
-                ].copy()
-            else:
-                filtered_data = data
+            # Include all data points (including zero values)
+            filtered_data = data.copy()
 
             # Clear and recreate axes for seaborn
             self._reset_sweep_axes()
@@ -1544,50 +1472,162 @@ class PlotTabMixin:
 
 
     def _plot_parameter_box(self, data, x_param, y_param, color_param):
-        """Create box plot"""
+        """Create box plot with proper grouping by color parameter when selected"""
         try:
-            # Filter data to only include substrate-matched controls
-            if 'substrate' in data.columns:
-                additive_cols = [col for col in data.columns
-                               if col.endswith('(M)') or col.startswith('excess ') or col.startswith('with ')]
-                substrates_with_param = data[data[x_param] > 0]['substrate'].unique()
-                if additive_cols:
-                    is_control = data[additive_cols].fillna(0).sum(axis=1) == 0
-                else:
-                    is_control = data[x_param] == 0
-                filtered_data = data[
-                    (data[x_param] > 0) |
-                    ((data[x_param] == 0) & is_control & (data['substrate'].isin(substrates_with_param)))
-                ].copy()
-            else:
-                filtered_data = data
+            from matplotlib.patches import Patch
 
-            # Group data for box plot
-            grouped_data = []
-            labels = []
+            filtered_data = data.copy()
 
-            for group_val in filtered_data[x_param].unique():
-                group_data = filtered_data[filtered_data[x_param] == group_val][y_param].dropna()
-                if len(group_data) > 0:
-                    grouped_data.append(group_data)
-                    labels.append(str(group_val))
-
-            if not grouped_data:
-                self._clear_sweep_ax("No valid data for box plot.")
-                return
-
-            box_plot = self.sweep_ax.boxplot(grouped_data, labels=labels, patch_artist=True)
-
-            # Color boxes if color parameter is specified
+            # Round numeric columns to avoid floating point precision issues
+            # (e.g., 0.8 vs 0.8000000000000002 being treated as different values)
+            if x_param in filtered_data.columns and pd.api.types.is_numeric_dtype(filtered_data[x_param]):
+                filtered_data[x_param] = filtered_data[x_param].round(6)
             if color_param and color_param != 'None' and color_param in filtered_data.columns:
-                colors = plt.cm.viridis(np.linspace(0, 1, len(box_plot['boxes'])))
+                if pd.api.types.is_numeric_dtype(filtered_data[color_param]):
+                    filtered_data[color_param] = filtered_data[color_param].round(6)
+
+            # Metric labels for nice display
+            metric_labels = {
+                'Voc': 'Open Circuit Voltage (V)',
+                'Jsc_mAcm2': 'Short Circuit Current Density (mA/cm²)',
+                'FF_pct': 'Fill Factor (%)',
+                'PCE_pct': 'Power Conversion Efficiency (%)'
+            }
+
+            x_label = x_param.replace(' (M)', '').replace(' (mg/mL)', '')
+            y_label = metric_labels.get(y_param, y_param)
+
+            # Check if we should group by color parameter
+            use_color_grouping = (color_param and color_param != 'None' and
+                                  color_param in filtered_data.columns)
+
+            if use_color_grouping:
+                # Group by BOTH x_param AND color_param
+                unique_x_vals = sorted([v for v in filtered_data[x_param].unique() if not pd.isna(v)])
+                unique_color_vals = sorted([v for v in filtered_data[color_param].unique() if not pd.isna(v)])
+
+                if len(unique_x_vals) == 0 or len(unique_color_vals) == 0:
+                    self._clear_sweep_ax("No valid data for box plot.")
+                    return
+
+                # Create color map for color parameter values
+                color_map = plt.cm.Set2(np.linspace(0, 1, len(unique_color_vals)))
+                color_dict = {val: color_map[i] for i, val in enumerate(unique_color_vals)}
+
+                grouped_data = []
+                labels = []
+                positions = []
+                box_colors = []
+
+                n_color_groups = len(unique_color_vals)
+                box_width = 0.8 / n_color_groups  # Width of each box within a group
+
+                for x_idx, x_val in enumerate(unique_x_vals):
+                    group_center = x_idx + 1
+
+                    for c_idx, color_val in enumerate(unique_color_vals):
+                        # Filter for this x_val AND color_val combination
+                        mask = (filtered_data[x_param] == x_val) & (filtered_data[color_param] == color_val)
+                        group_data = filtered_data.loc[mask, y_param].dropna()
+
+                        if len(group_data) > 0:
+                            grouped_data.append(group_data)
+                            # Position boxes side by side within each x-value group
+                            offset = (c_idx - (n_color_groups - 1) / 2) * box_width
+                            positions.append(group_center + offset)
+                            box_colors.append(color_dict[color_val])
+                            # Label only shows x value (color is shown in legend)
+                            val_str = f"{x_val:.3g}" if isinstance(x_val, (int, float)) else str(x_val)
+                            labels.append(val_str)
+
+                if not grouped_data:
+                    self._clear_sweep_ax("No valid data for box plot.")
+                    return
+
+                # Create box plot
+                box_plot = self.sweep_ax.boxplot(grouped_data, positions=positions,
+                                                 patch_artist=True, showmeans=True,
+                                                 widths=box_width * 0.9,
+                                                 meanprops=dict(marker='D', markerfacecolor='red',
+                                                              markeredgecolor='darkred', markersize=5))
+
+                # Color boxes according to color parameter
+                for patch, color in zip(box_plot['boxes'], box_colors):
+                    patch.set_facecolor(color)
+                    patch.set_alpha(0.7)
+                    patch.set_edgecolor('black')
+                    patch.set_linewidth(1.5)
+
+                # Add mean values as text labels
+                for i, gdata in enumerate(grouped_data):
+                    mean_val = np.mean(gdata)
+                    self.sweep_ax.text(positions[i], mean_val, f'{mean_val:.2f}',
+                                      ha='center', va='bottom', fontsize=7,
+                                      bbox=dict(boxstyle='round,pad=0.2', facecolor='yellow', alpha=0.6))
+
+                # Set x-axis ticks at group centers with x-value labels
+                self.sweep_ax.set_xticks(range(1, len(unique_x_vals) + 1))
+                x_tick_labels = [f"{v:.3g}" if isinstance(v, (int, float)) else str(v) for v in unique_x_vals]
+                self.sweep_ax.set_xticklabels(x_tick_labels)
+
+                # Add legend for color parameter
+                color_label = color_param.replace(' (M)', '').replace(' (mg/mL)', '')
+                legend_elements = [Patch(facecolor=color_dict[val], edgecolor='black', alpha=0.7,
+                                        label=f"{color_label}={val:.3g}" if isinstance(val, (int, float)) else f"{color_label}={val}")
+                                  for val in unique_color_vals]
+                self.sweep_ax.legend(handles=legend_elements, loc='best', fontsize=8, framealpha=0.9)
+
+                self.sweep_ax.set_title(f'Box Plot: {y_label} vs {x_label} (grouped by {color_label})',
+                                       fontsize=13, fontweight='bold')
+            else:
+                # Original behavior: group only by x_param
+                grouped_data = []
+                labels = []
+                positions = []
+
+                unique_vals = sorted([v for v in filtered_data[x_param].unique() if not pd.isna(v)])
+                for i, group_val in enumerate(unique_vals):
+                    group_data = filtered_data[filtered_data[x_param] == group_val][y_param].dropna()
+                    if len(group_data) > 0:
+                        grouped_data.append(group_data)
+                        val_str = f"{group_val:.3g}" if isinstance(group_val, (int, float)) else str(group_val)
+                        labels.append(val_str)
+                        positions.append(i + 1)
+
+                if not grouped_data:
+                    self._clear_sweep_ax("No valid data for box plot.")
+                    return
+
+                # Create box plot with enhanced styling
+                box_plot = self.sweep_ax.boxplot(grouped_data, positions=positions, labels=labels,
+                                                 patch_artist=True, showmeans=True, widths=0.6,
+                                                 meanprops=dict(marker='D', markerfacecolor='red',
+                                                              markeredgecolor='darkred', markersize=6))
+
+                # Color boxes with sequential colors
+                colors = plt.cm.Set3(np.linspace(0, 1, len(box_plot['boxes'])))
                 for patch, color in zip(box_plot['boxes'], colors):
                     patch.set_facecolor(color)
+                    patch.set_alpha(0.7)
+                    patch.set_edgecolor('black')
+                    patch.set_linewidth(1.5)
 
-            self.sweep_ax.set_xlabel(x_param, fontsize=12)
-            self.sweep_ax.set_ylabel(y_param, fontsize=12)
-            self.sweep_ax.set_title(f'Box Plot: {y_param} vs {x_param}', fontsize=14)
-            self.sweep_ax.grid(True, alpha=0.3)
+                # Add mean values as text labels
+                for i, gdata in enumerate(grouped_data):
+                    mean_val = np.mean(gdata)
+                    self.sweep_ax.text(positions[i], mean_val, f'{mean_val:.2f}',
+                                      ha='center', va='bottom', fontsize=8,
+                                      bbox=dict(boxstyle='round,pad=0.2', facecolor='yellow', alpha=0.6))
+
+                self.sweep_ax.set_title(f'Box Plot: {y_label} vs {x_label}', fontsize=13, fontweight='bold')
+
+            self.sweep_ax.set_xlabel(x_label, fontsize=12, fontweight='bold')
+            self.sweep_ax.set_ylabel(y_label, fontsize=12, fontweight='bold')
+            self.sweep_ax.grid(True, alpha=0.3, linestyle='--', axis='y')
+            self.sweep_ax.tick_params(axis='x', rotation=45, labelsize=9)
+            self.sweep_ax.tick_params(axis='y', labelsize=10)
+
+            self.sweep_fig.tight_layout()
 
         except Exception as e:
             self._clear_sweep_ax(f"Error creating box plot: {str(e)}")

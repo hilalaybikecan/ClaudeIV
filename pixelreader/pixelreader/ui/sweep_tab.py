@@ -84,8 +84,8 @@ class SweepTabMixin:
 
         ttk.Separator(sweep_side).grid(row=18, column=0, sticky="ew", pady=6)
 
-        # Box plot controls
-        ttk.Label(sweep_side, text="Box Plot Analysis", font=("Arial", 10, "bold")).grid(row=19, column=0, sticky="w", pady=(5, 2))
+        # Multi-box plot controls
+        ttk.Label(sweep_side, text="Multi-Box Plots", font=("Arial", 10, "bold")).grid(row=19, column=0, sticky="w", pady=(5, 2))
 
         # Multi-column selection for box plot grouping
         ttk.Label(sweep_side, text="Select Columns (Ctrl+Click):").grid(row=20, column=0, sticky="w", pady=(5, 0))
@@ -97,6 +97,7 @@ class SweepTabMixin:
         # Listbox for multi-selection
         self.boxplot_columns_listbox = tk.Listbox(listbox_frame, height=6, selectmode=tk.EXTENDED, exportselection=False)
         self.boxplot_columns_listbox.grid(row=0, column=0, sticky="ew")
+        self.boxplot_columns_listbox.bind("<<ListboxSelect>>", lambda e: self.generate_box_plot())
 
         # Scrollbar for listbox
         listbox_scroll = ttk.Scrollbar(listbox_frame, orient="vertical", command=self.boxplot_columns_listbox.yview)
@@ -112,16 +113,19 @@ class SweepTabMixin:
                                          values=["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"],
                                          state="readonly", width=30)
         boxplot_metric_cb.grid(row=23, column=0, sticky="ew", pady=2)
+        boxplot_metric_cb.bind("<<ComboboxSelected>>", lambda e: self.generate_box_plot())
 
         # Control filtering checkbox
         self.include_controls_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(sweep_side, text="Include controls (all zeros)",
-                       variable=self.include_controls_var).grid(row=24, column=0, sticky="w", pady=2)
+                       variable=self.include_controls_var,
+                       command=self.generate_box_plot).grid(row=24, column=0, sticky="w", pady=2)
 
         # Show mean checkbox
         self.show_mean_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(sweep_side, text="Show mean values",
-                       variable=self.show_mean_var).grid(row=25, column=0, sticky="w", pady=2)
+                       variable=self.show_mean_var,
+                       command=self.generate_box_plot).grid(row=25, column=0, sticky="w", pady=2)
 
         ttk.Button(sweep_side, text="Generate Box Plot", command=self.generate_box_plot).grid(row=26, column=0, sticky="ew", pady=2)
 
