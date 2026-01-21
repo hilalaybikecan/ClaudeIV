@@ -152,6 +152,8 @@ class CompositionTabMixin:
         self.df = self._to_dataframe(all_sweeps)
         self.df["group_index"] = self.df["composition_index"].apply(comp_to_group)
         self.df_with_flags = self.df.copy()
+        self.df_with_flags["include"] = True  # Initialize all rows as included
+        self._rebuild_sweep_uid_map()
 
         self._populate_substrate_combo()
         self._populate_sweep_filter_combo()
@@ -183,6 +185,7 @@ class CompositionTabMixin:
         rows = []
         for s in sweeps:
             rows.append({
+                "sweep_uid": id(s),
                 "substrate": s.substrate,
                 "pixel_id": s.pixel_id,
                 "composition_index": s.composition_index,
@@ -196,6 +199,11 @@ class CompositionTabMixin:
                 "condition_name": s.condition_name
             })
         return pd.DataFrame(rows)
+
+
+    def _rebuild_sweep_uid_map(self):
+        """Build a lookup from sweep uid to sweep object."""
+        self._sweep_by_uid = {id(s): s for s in self.data} if self.data else {}
 
 
     def _populate_substrate_combo(self):
@@ -432,23 +440,59 @@ class CompositionTabMixin:
         sel = self.tree.selection()
         if not sel: 
             return
-        
+
         # Get selected indices and sort in reverse order to delete from end first
         indices_to_remove = sorted([int(iid) for iid in sel], reverse=True)
-        
+
+        # Capture selected rows before mutating dataframes
+        selected_rows = self.df_with_flags.loc[indices_to_remove].copy()
+
         # Remove rows from dataframe
         self.df_with_flags = self.df_with_flags.drop(indices_to_remove).reset_index(drop=True)
-        
+
         # Also update the underlying df if it exists
         if self.df is not None:
             self.df = self.df.drop(indices_to_remove).reset_index(drop=True)
-            
-        # Update the original data list as well
+
+        # Update the original data list as well (match by sweep uid when available)
         if self.data:
-            for idx in indices_to_remove:
-                if idx < len(self.data):
-                    self.data.pop(idx)
-        
+            sweep_uids = set()
+            if "sweep_uid" in selected_rows.columns:
+                sweep_uids = set(int(u) for u in selected_rows["sweep_uid"].dropna().tolist())
+
+            if sweep_uids:
+                self.data = [s for s in self.data if id(s) not in sweep_uids]
+            else:
+                to_remove_counts = {}
+                for _, r in selected_rows.iterrows():
+                    sweep_id = None if pd.isna(r.get("sweep_id")) else int(r.get("sweep_id"))
+                    key = (
+                        int(r["substrate"]) if pd.notna(r["substrate"]) else None,
+                        int(r["pixel_id"]) if pd.notna(r["pixel_id"]) else None,
+                        int(r["composition_index"]) if pd.notna(r["composition_index"]) else None,
+                        int(r["position_in_composition"]) if pd.notna(r["position_in_composition"]) else None,
+                        r["direction"],
+                        sweep_id,
+                    )
+                    to_remove_counts[key] = to_remove_counts.get(key, 0) + 1
+
+                new_data = []
+                for sweep in self.data:
+                    key = (
+                        getattr(sweep, "substrate", None),
+                        getattr(sweep, "pixel_id", None),
+                        getattr(sweep, "composition_index", None),
+                        getattr(sweep, "position_in_composition", None),
+                        getattr(sweep, "direction", None),
+                        getattr(sweep, "sweep_id", None),
+                    )
+                    if to_remove_counts.get(key, 0) > 0:
+                        to_remove_counts[key] -= 1
+                        continue
+                    new_data.append(sweep)
+                self.data = new_data
+            self._rebuild_sweep_uid_map()
+
         self.refresh_table()
         self.refresh_plots()
 
@@ -515,6 +559,7 @@ class CompositionTabMixin:
         rows = []
         for s in self.data:
             rows.append({
+                "sweep_uid": id(s),
                 "substrate": s.substrate,
                 "pixel_id": s.pixel_id,
                 "composition_index": s.composition_index,
@@ -530,6 +575,8 @@ class CompositionTabMixin:
         self.df = pd.DataFrame(rows)
         self.df["group_index"] = self.df["composition_index"].apply(comp_to_group)
         self.df_with_flags = self.df.copy()
+        self.df_with_flags["include"] = True  # Initialize all rows as included
+        self._rebuild_sweep_uid_map()
         self._populate_substrate_combo()
         self._populate_sweep_filter_combo()
         self.refresh_table(); self.refresh_plots()

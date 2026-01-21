@@ -1003,6 +1003,14 @@ class PlotTabMixin:
                 patch.set_edgecolor('black')
                 patch.set_linewidth(1.5)
 
+            # Add individual data points with jitter
+            for i, (data, pos) in enumerate(zip(all_plot_data, all_positions)):
+                # Generate jitter (random x-offset for each point)
+                jitter = np.random.uniform(-0.15, 0.15, size=len(data))
+                x_positions = np.full(len(data), pos) + jitter
+                self.sweep_ax.scatter(x_positions, data, alpha=0.5, s=20,
+                                     color='black', edgecolors='none', zorder=3)
+
             # Add mean values as text if requested
             if show_mean:
                 for i, data in enumerate(all_plot_data):

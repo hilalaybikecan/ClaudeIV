@@ -149,15 +149,15 @@ class JVTabMixin:
         # Clear existing items
         for item in self.jv_selection_tree.get_children():
             self.jv_selection_tree.delete(item)
-        
+
         if self.df_with_flags is None or self.df_with_flags.empty:
             return
-            
+
         # Get filtered data
         filtered_df = self._filtered_df()
         if filtered_df.empty:
             return
-        
+
         # Add rows to selection table (exact same format as main table)
         for idx, r in filtered_df.iterrows():
             vals = (
@@ -173,8 +173,20 @@ class JVTabMixin:
                 None if pd.isna(r["PCE_pct"]) else round(float(r["PCE_pct"]), 2),
                 None if pd.isna(r.get("avPCE_pct")) else round(float(r["avPCE_pct"]), 2),
             )
-            # Use dataframe index as item identifier for lookup
-            self.jv_selection_tree.insert("", "end", iid=str(idx), values=vals)
+            # Use sweep uid when available for stable lookups
+            sweep_uid = r.get("sweep_uid")
+            if pd.notna(sweep_uid):
+                item_key = str(int(sweep_uid))
+            else:
+                # Fallback to key based on identifying attributes
+                substrate = int(r["substrate"]) if pd.notna(r["substrate"]) else 0
+                pixel_id = int(r["pixel_id"]) if pd.notna(r["pixel_id"]) else 0
+                comp = int(r["composition_index"]) if pd.notna(r["composition_index"]) else 0
+                pos = int(r["position_in_composition"]) if pd.notna(r["position_in_composition"]) else 0
+                direction = r["direction"]
+                sweep_id = int(r["sweep_id"]) if pd.notna(r.get("sweep_id")) else "na"
+                item_key = f"{substrate}_{pixel_id}_{comp}_{pos}_{direction}_{sweep_id}"
+            self.jv_selection_tree.insert("", "end", iid=item_key, values=vals)
     
 
     def sort_jv_by_column(self, column: str):
@@ -222,7 +234,7 @@ class JVTabMixin:
                 # Clear and repopulate JV table with sorted data
                 for item in self.jv_selection_tree.get_children():
                     self.jv_selection_tree.delete(item)
-                
+
                 for idx, r in sorted_df.iterrows():
                     vals = (
                         int(r["substrate"]) if pd.notna(r["substrate"]) else "",
@@ -237,7 +249,19 @@ class JVTabMixin:
                         None if pd.isna(r["PCE_pct"]) else round(float(r["PCE_pct"]), 2),
                         None if pd.isna(r.get("avPCE_pct")) else round(float(r["avPCE_pct"]), 2),
                     )
-                    self.jv_selection_tree.insert("", "end", iid=str(idx), values=vals)
+                    # Use a unique key based on identifying attributes (not DataFrame index)
+                    substrate = int(r["substrate"]) if pd.notna(r["substrate"]) else 0
+                    pixel_id = int(r["pixel_id"]) if pd.notna(r["pixel_id"]) else 0
+                    comp = int(r["composition_index"]) if pd.notna(r["composition_index"]) else 0
+                    pos = int(r["position_in_composition"]) if pd.notna(r["position_in_composition"]) else 0
+                    direction = r["direction"]
+                    sweep_uid = r.get("sweep_uid")
+                    if pd.notna(sweep_uid):
+                        item_key = str(int(sweep_uid))
+                    else:
+                        sweep_id = int(r["sweep_id"]) if pd.notna(r.get("sweep_id")) else "na"
+                        item_key = f"{substrate}_{pixel_id}_{comp}_{pos}_{direction}_{sweep_id}"
+                    self.jv_selection_tree.insert("", "end", iid=item_key, values=vals)
 
                 # Update column headers to show sort direction
                 for col in ["substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "avPCE_pct"]:
@@ -259,7 +283,7 @@ class JVTabMixin:
         if not selected_items:
             self.clear_jv_plot()
             return
-        
+
         # Clear the plot
         self.jv_ax.clear()
 
@@ -267,18 +291,28 @@ class JVTabMixin:
         selected_sweeps = []
 
         for item in selected_items:
-            # Use the iid (dataframe index) to look up the row directly from original df
+            # Prefer direct lookup by sweep uid if available
             try:
-                df_idx = int(item)
-                if df_idx not in self.df_with_flags.index:
+                uid = int(item)
+                sweep = getattr(self, "_sweep_by_uid", {}).get(uid)
+                if sweep is not None:
+                    selected_sweeps.append(sweep)
                     continue
-
-                row = self.df_with_flags.loc[df_idx]
-                substrate = int(row["substrate"])
-                pixel_id = int(row["pixel_id"])
-                comp = int(row["composition_index"])
-                pos = int(row["position_in_composition"])
-                direction = row["direction"]
+            except ValueError:
+                pass
+            # Parse the iid key: substrate_pixelid_comp_pos_direction
+            try:
+                parts = item.split("_")
+                if len(parts) < 5:
+                    continue
+                substrate = int(parts[0])
+                pixel_id = int(parts[1])
+                comp = int(parts[2])
+                pos = int(parts[3])
+                direction = parts[4]
+                sweep_id = None
+                if len(parts) >= 6 and parts[5] != "na":
+                    sweep_id = int(parts[5])
 
                 # Find the corresponding JVSweep object
                 for sweep in self.data:
@@ -286,10 +320,11 @@ class JVTabMixin:
                         sweep.pixel_id == pixel_id and
                         sweep.composition_index == comp and
                         sweep.position_in_composition == pos and
-                        sweep.direction == direction):
+                        sweep.direction == direction and
+                        (sweep_id is None or getattr(sweep, "sweep_id", None) == sweep_id)):
                         selected_sweeps.append(sweep)
                         break
-            except (ValueError, KeyError):
+            except (ValueError, KeyError, IndexError):
                 continue
         
         if not selected_sweeps:
