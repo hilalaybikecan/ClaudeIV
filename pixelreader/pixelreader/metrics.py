@@ -76,12 +76,12 @@ def compute_metrics(voltage: np.ndarray, current_A: np.ndarray, area_cm2: float,
         FF = (abs(Vmpp) * abs(Jmpp_Acm2)) / (abs(Voc) * abs(Jsc_Acm2))
         FF_pct = 100.0 * FF
 
-    # PCE (%) = Pout_mpp / Pin * 100 * 1.5 (sun intensity correction)
+    # PCE (%) = Pout_mpp / Pin * 100
     PCE_pct = None
     if light_mw_cm2 > 0:
-        PCE_pct = (Pmpp_out / light_mw_cm2) * 100.0 * 1.5
+        PCE_pct = (Pmpp_out / light_mw_cm2) * 100.0 
 
-    # Report Jsc as positive mA/cm2 * 1.5 (sun intensity correction)
-    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3 * 1.5
+    # Report Jsc as positive mA/cm2 
+    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3
 
     return Voc, Jsc_mAcm2, FF_pct, PCE_pct

@@ -30,7 +30,7 @@ class JVApp(tk.Tk, CompositionTabMixin, PlotTabMixin, SweepTabMixin, JVTabMixin)
 
         # Parameters
         self.area_cm2 = tk.DoubleVar(value=0.04)
-        self.light_mw_cm2 = tk.DoubleVar(value=100.0)
+        self.light_mw_cm2 = tk.DoubleVar(value=75.0)
         self.include_forward = tk.BooleanVar(value=True)
         self.include_reverse = tk.BooleanVar(value=True)
         self.selected_sweep_filter = tk.StringVar(value="All")  # Sweep filter for Tab 1
@@ -40,6 +40,8 @@ class JVApp(tk.Tk, CompositionTabMixin, PlotTabMixin, SweepTabMixin, JVTabMixin)
         self.combine_fr = tk.BooleanVar(value=True)
         self.grouping_mode = tk.StringVar(value="11 compositions")
         self.expand_substrate_axis = tk.BooleanVar(value=True)
+        self.discard_edge_rows = tk.BooleanVar(value=False)
+        self.load_recursive = tk.BooleanVar(value=True)
 
         # Plotting options for tab1
         self.colormap_choice = tk.StringVar(value="viridis")

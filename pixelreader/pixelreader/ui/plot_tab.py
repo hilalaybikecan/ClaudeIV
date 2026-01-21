@@ -60,20 +60,21 @@ class PlotTabMixin:
         ttk.Label(plot_left, text="Grouping:").grid(row=18, column=0, sticky="w", pady=(6, 0))
         grp_cb = ttk.Combobox(plot_left, textvariable=self.grouping_mode, values=["11 compositions", "9 groups"], state="readonly", width=18)
         grp_cb.grid(row=19, column=0, sticky="ew", pady=2); grp_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
-        ttk.Checkbutton(plot_left, text="Expand x-axis by substrate", variable=self.expand_substrate_axis, command=self.refresh_plots).grid(row=20, column=0, sticky="w", pady=(2, 6))
+        ttk.Checkbutton(plot_left, text="Discard edges", variable=self.discard_edge_rows, command=self.refresh_plots).grid(row=20, column=0, sticky="w")
+        ttk.Checkbutton(plot_left, text="Expand x-axis by substrate", variable=self.expand_substrate_axis, command=self.refresh_plots).grid(row=21, column=0, sticky="w", pady=(2, 6))
 
-        ttk.Separator(plot_left).grid(row=21, column=0, sticky="ew", pady=6)
-        ttk.Label(plot_left, text="Plot Styling").grid(row=22, column=0, sticky="w")
-        ttk.Label(plot_left, text="Colormap:").grid(row=23, column=0, sticky="w", pady=(2, 0))
+        ttk.Separator(plot_left).grid(row=22, column=0, sticky="ew", pady=6)
+        ttk.Label(plot_left, text="Plot Styling").grid(row=23, column=0, sticky="w")
+        ttk.Label(plot_left, text="Colormap:").grid(row=24, column=0, sticky="w", pady=(2, 0))
         colormap_cb = ttk.Combobox(plot_left, textvariable=self.colormap_choice,
                                     values=["viridis", "plasma", "inferno", "magma", "cividis", "coolwarm", "RdYlGn", "RdYlBu"],
                                     state="readonly", width=12)
-        colormap_cb.grid(row=24, column=0, sticky="ew")
+        colormap_cb.grid(row=25, column=0, sticky="ew")
         colormap_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
 
-        ttk.Label(plot_left, text="Axis Limits (optional):").grid(row=25, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(plot_left, text="Axis Limits (optional):").grid(row=26, column=0, sticky="w", pady=(4, 0))
         axis_frame = ttk.Frame(plot_left)
-        axis_frame.grid(row=26, column=0, sticky="ew")
+        axis_frame.grid(row=27, column=0, sticky="ew")
         ttk.Label(axis_frame, text="X min:").grid(row=0, column=0, sticky="w")
         ttk.Entry(axis_frame, textvariable=self.x_min_var, width=6).grid(row=0, column=1, sticky="w", padx=2)
         ttk.Label(axis_frame, text="max:").grid(row=0, column=2, sticky="w")
@@ -82,33 +83,33 @@ class PlotTabMixin:
         ttk.Entry(axis_frame, textvariable=self.y_min_var, width=6).grid(row=1, column=1, sticky="w", padx=2)
         ttk.Label(axis_frame, text="max:").grid(row=1, column=2, sticky="w")
         ttk.Entry(axis_frame, textvariable=self.y_max_var, width=6).grid(row=1, column=3, sticky="w", padx=2)
-        ttk.Button(plot_left, text="Apply limits", command=self.refresh_plots).grid(row=27, column=0, sticky="ew", pady=2)
-        ttk.Button(plot_left, text="Clear limits", command=self.clear_axis_limits).grid(row=28, column=0, sticky="ew", pady=2)
+        ttk.Button(plot_left, text="Apply limits", command=self.refresh_plots).grid(row=28, column=0, sticky="ew", pady=2)
+        ttk.Button(plot_left, text="Clear limits", command=self.clear_axis_limits).grid(row=29, column=0, sticky="ew", pady=2)
 
-        ttk.Separator(plot_left).grid(row=29, column=0, sticky="ew", pady=6)
-        ttk.Label(plot_left, text="Figure Size & Fonts").grid(row=30, column=0, sticky="w")
+        ttk.Separator(plot_left).grid(row=30, column=0, sticky="ew", pady=6)
+        ttk.Label(plot_left, text="Figure Size & Fonts").grid(row=31, column=0, sticky="w")
         figsize_frame = ttk.Frame(plot_left)
-        figsize_frame.grid(row=31, column=0, sticky="ew")
+        figsize_frame.grid(row=32, column=0, sticky="ew")
         ttk.Label(figsize_frame, text="Width:").grid(row=0, column=0, sticky="w")
         ttk.Entry(figsize_frame, textvariable=self.comp_fig_width, width=6).grid(row=0, column=1, sticky="w", padx=2)
         ttk.Label(figsize_frame, text="Height:").grid(row=0, column=2, sticky="w")
         ttk.Entry(figsize_frame, textvariable=self.comp_fig_height, width=6).grid(row=0, column=3, sticky="w", padx=2)
 
         font_frame = ttk.Frame(plot_left)
-        font_frame.grid(row=32, column=0, sticky="ew")
+        font_frame.grid(row=33, column=0, sticky="ew")
         ttk.Label(font_frame, text="Title:").grid(row=0, column=0, sticky="w")
         ttk.Entry(font_frame, textvariable=self.comp_title_fontsize, width=6).grid(row=0, column=1, sticky="w", padx=2)
         ttk.Label(font_frame, text="Axis:").grid(row=0, column=2, sticky="w")
         ttk.Entry(font_frame, textvariable=self.comp_axis_fontsize, width=6).grid(row=0, column=3, sticky="w", padx=2)
 
-        ttk.Button(plot_left, text="Apply Figure Settings", command=self.update_comp_figsize).grid(row=33, column=0, sticky="ew", pady=2)
+        ttk.Button(plot_left, text="Apply Figure Settings", command=self.update_comp_figsize).grid(row=34, column=0, sticky="ew", pady=2)
 
-        ttk.Separator(plot_left).grid(row=34, column=0, sticky="ew", pady=6)
-        ttk.Label(plot_left, text="Substrate-Composition").grid(row=35, column=0, sticky="w")
-        ttk.Label(plot_left, text="Pairs (e.g., 5-3, 2-8):").grid(row=36, column=0, sticky="w", pady=(2, 0))
+        ttk.Separator(plot_left).grid(row=35, column=0, sticky="ew", pady=6)
+        ttk.Label(plot_left, text="Substrate-Composition").grid(row=36, column=0, sticky="w")
+        ttk.Label(plot_left, text="Pairs (e.g., 5-3, 2-8):").grid(row=37, column=0, sticky="w", pady=(2, 0))
         self.sub_comp_selection_var = tk.StringVar(value="")
-        ttk.Entry(plot_left, textvariable=self.sub_comp_selection_var, width=20).grid(row=37, column=0, sticky="ew", pady=2)
-        ttk.Button(plot_left, text="Manual Pixel Plot", command=self.plot_substrate_composition_boxplot).grid(row=38, column=0, sticky="ew")
+        ttk.Entry(plot_left, textvariable=self.sub_comp_selection_var, width=20).grid(row=38, column=0, sticky="ew", pady=2)
+        ttk.Button(plot_left, text="Manual Pixel Plot", command=self.plot_substrate_composition_boxplot).grid(row=39, column=0, sticky="ew")
 
         # Right panel - Plot display with scrollbars
         plot_right = ttk.Frame(self.plot_frame, padding=8); plot_right.grid(row=0, column=1, sticky="nsew")
@@ -185,6 +186,10 @@ class PlotTabMixin:
                 df = df[df["sweep_id"] == sweep_num]
             except ValueError:
                 pass  # If conversion fails, ignore filter
+
+        # Optionally drop edge compositions (1 and 11)
+        if self.discard_edge_rows.get() and "composition_index" in df.columns:
+            df = df[~df["composition_index"].isin([1, 11])]
 
         # Handle F/R toggles only when not combining
         if not self.combine_fr.get():

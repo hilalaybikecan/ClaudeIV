@@ -28,24 +28,25 @@ class CompositionTabMixin:
         ttk.Label(side, text="Data files").grid(row=0, column=0, sticky="w")
         ttk.Button(side, text="Load file", command=self.load_file).grid(row=1, column=0, sticky="ew", pady=2)
         ttk.Button(side, text="Load folder", command=self.load_folder).grid(row=2, column=0, sticky="ew", pady=2)
+        ttk.Checkbutton(side, text="Load subfolders", variable=self.load_recursive).grid(row=3, column=0, sticky="w", pady=2)
 
-        ttk.Separator(side).grid(row=3, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Parameters").grid(row=4, column=0, sticky="w")
-        pfrm = ttk.Frame(side); pfrm.grid(row=5, column=0, sticky="ew")
-        ttk.Label(pfrm, text="Area (cm²):").grid(row=0, column=0, sticky="w")
+        ttk.Separator(side).grid(row=4, column=0, sticky="ew", pady=6)
+        ttk.Label(side, text="Parameters").grid(row=5, column=0, sticky="w")
+        pfrm = ttk.Frame(side); pfrm.grid(row=6, column=0, sticky="ew")
+        ttk.Label(pfrm, text="Area (cmA?):").grid(row=0, column=0, sticky="w")
         ttk.Entry(pfrm, textvariable=self.area_cm2, width=10).grid(row=0, column=1, sticky="w", padx=4)
-        ttk.Label(pfrm, text="Pin (mW/cm²):").grid(row=1, column=0, sticky="w")
+        ttk.Label(pfrm, text="Pin (mW/cmA?):").grid(row=1, column=0, sticky="w")
         ttk.Entry(pfrm, textvariable=self.light_mw_cm2, width=10).grid(row=1, column=1, sticky="w", padx=4)
         ttk.Button(pfrm, text="Recompute metrics", command=self.recompute_metrics).grid(row=2, column=0, columnspan=2, sticky="ew", pady=4)
 
-        ttk.Separator(side).grid(row=6, column=0, sticky="ew", pady=6)
-        ttk.Button(side, text="Remove items…", command=self.open_remove_dialog).grid(row=7, column=0, sticky="ew")
+        ttk.Separator(side).grid(row=7, column=0, sticky="ew", pady=6)
+        ttk.Button(side, text="Remove items???", command=self.open_remove_dialog).grid(row=8, column=0, sticky="ew")
 
-        ttk.Separator(side).grid(row=8, column=0, sticky="ew", pady=6)
-        ttk.Label(side, text="Header regex").grid(row=9, column=0, sticky="w")
-        ttk.Entry(side, textvariable=self.header_pattern_var, width=38).grid(row=10, column=0, sticky="ew", pady=2)
-        ttk.Button(side, text="Reload last folder/file", command=self.reload_last).grid(row=11, column=0, sticky="ew", pady=2)
-        ttk.Button(side, text="Parse report", command=self.show_parse_report).grid(row=12, column=0, sticky="ew", pady=2)
+        ttk.Separator(side).grid(row=9, column=0, sticky="ew", pady=6)
+        ttk.Label(side, text="Header regex").grid(row=10, column=0, sticky="w")
+        ttk.Entry(side, textvariable=self.header_pattern_var, width=38).grid(row=11, column=0, sticky="ew", pady=2)
+        ttk.Button(side, text="Reload last folder/file", command=self.reload_last).grid(row=12, column=0, sticky="ew", pady=2)
+        ttk.Button(side, text="Parse report", command=self.show_parse_report).grid(row=13, column=0, sticky="ew", pady=2)
 
         # Right panel - Just the data table
         right = ttk.Frame(self.comp_frame, padding=8); right.grid(row=0, column=1, sticky="nsew")
@@ -79,7 +80,12 @@ class CompositionTabMixin:
     def load_folder(self):
         d = filedialog.askdirectory(title="Select folder with JV files")
         if not d: return
-        paths = [p for p in Path(d).glob("**/*") if p.suffix.lower() in (".txt", ".dat", ".csv")]
+        recursive = self.load_recursive.get()
+        pattern = "**/*" if recursive else "*"
+        paths = [
+            p for p in Path(d).glob(pattern)
+            if p.is_file() and p.suffix.lower() in (".txt", ".dat", ".csv")
+        ]
         if not paths:
             messagebox.showwarning("No files", "No .txt/.dat/.csv files found in that folder."); return
         self._load_paths(paths); self._last_paths = paths

@@ -4,14 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a specialized Python-based JV (Current-Voltage) Data Analyzer application for perovskite solar cell measurements from a different measurement system format than the main IVapp_v5.py application. The 66PIXEL.py application is designed to handle multi-section data files containing measurements from multiple pixel positions and compositions.
+This is a specialized Python-based JV (Current-Voltage) Data Analyzer application for perovskite solar cell measurements from a different measurement system format than the main IVapp_v5.py application. The `IVapp_66PIXEL.py` entrypoint launches a GUI that handles multi-section data files containing measurements from multiple pixel positions and compositions.
 
 ## Architecture
 
 ### Main Application Structure
-- **JVApp class**: Main Tkinter GUI application managing the entire interface and data flow
-- **JVSweep dataclass**: Core data structure representing individual J-V measurements
-- **Parsing system**: Regex-based section parsing for flexible data format handling
+- **JVApp class**: Main Tkinter GUI application managing the entire interface and data flow (in `pixelreader/ui/app.py`)
+- **JVSweep dataclass**: Core data structure representing individual J-V measurements (in `pixelreader/models.py`)
+- **Parsing system**: Regex-based section parsing for flexible data format handling (in `pixelreader/parsing.py`)
 
 ### Core Data Storage
 - `data`: List of JVSweep objects containing all measurement data
@@ -70,24 +70,23 @@ class JVSweep:
 ## Key Functions and Locations
 
 ### File Parsing
-- `parse_sections_from_text()`: Main parsing function at 66PIXEL.py:67
-- `build_sweeps_from_file()`: File processing at 66PIXEL.py:122
-- `_substrate_from_filename()`: Substrate ID extraction at 66PIXEL.py:39
+- `parse_sections_from_text()`: `pixelreader/parsing.py`
+- `build_sweeps_from_file()`: `pixelreader/parsing.py`
+- `_substrate_from_filename()`: `pixelreader/parsing.py`
 
-### Metrics Calculation  
-- `compute_metrics()`: Primary metrics computation at 66PIXEL.py:178
-- `_interp_x_at_y_zero()`: Voc calculation helper at 66PIXEL.py:154
-- `_interp_y_at_x_zero()`: Jsc calculation helper at 66PIXEL.py:166
+### Metrics Calculation
+- `compute_metrics()`: `pixelreader/metrics.py`
+- `_interp_x_at_y_zero()`: `pixelreader/metrics.py`
+- `_interp_y_at_x_zero()`: `pixelreader/metrics.py`
 
 ### Data Management
-- `_to_dataframe()`: Convert sweeps to pandas DataFrame at 66PIXEL.py:436
-- `_filtered_df()`: Apply filters and toggles at 66PIXEL.py:653
-- `apply_thresholds()`: Threshold-based filtering at 66PIXEL.py:461
+- `_to_dataframe()`: `pixelreader/ui/composition_tab.py`
+- `_filtered_df()`: `pixelreader/ui/plot_tab.py`
 
 ### Visualization
-- `plot_boxplot_groups()`: Statistical box plots at 66PIXEL.py:687
-- `plot_heatmap()`: Substrate × composition heatmaps at 66PIXEL.py:736
-- `plot_substrate_pixel_map()`: Individual substrate pixel maps at 66PIXEL.py:778
+- `plot_boxplot_groups()`: `pixelreader/ui/plot_tab.py`
+- `plot_heatmap()`: `pixelreader/ui/plot_tab.py`
+- `plot_substrate_pixel_map()`: `pixelreader/ui/plot_tab.py`
 
 ## Advanced Features
 
@@ -98,7 +97,7 @@ class JVSweep:
 
 ### Composition Grouping
 - **11 compositions mode**: Direct composition indices (1-11)
-- **9 groups mode**: Mapped grouping using `comp_to_group()` function at 66PIXEL.py:228
+- **9 groups mode**: Mapped grouping using `comp_to_group()` in `pixelreader/grouping.py`
 - **Pixel mapping**: `pixel_id = (comp - 1) * 6 + pos` formula
 
 ### Interactive Filtering
@@ -122,7 +121,7 @@ class JVSweep:
 
 ### Measurement Settings
 - `area_cm2`: Device active area (default: 0.04 cm²)
-- `light_mw_cm2`: Illumination intensity (default: 100 mW/cm²)
+- `light_mw_cm2`: Illumination intensity (default: 75 mW/cm²)
 
 ### Analysis Options
 - `combine_substrates`: Merge data across substrates
@@ -130,11 +129,29 @@ class JVSweep:
 - `expand_substrate_axis`: Separate substrate data in plots
 - `grouping_mode`: Toggle between composition and group modes
 
+## Directory Structure
+
+### Entrypoint and Packages
+- `IVapp_66PIXEL.py`: Thin entrypoint that launches `JVApp`
+- `pixelreader/`: Core package for data and GUI components
+  - `models.py`: `JVSweep` dataclass
+  - `parsing.py`: Section parsing and sweep building
+  - `metrics.py`: Voc/Jsc/FF/PCE calculations
+  - `grouping.py`: Composition group mapping
+  - `conditions.py`: Excel ingestion + sweep condition mapping
+  - `wellmap.py`: Pixel/well helpers
+  - `ui/`: Tkinter GUI mixins and app class
+    - `app.py`: `JVApp` class (mixes tab modules)
+    - `composition_tab.py`: Data loading + table workflows
+    - `plot_tab.py`: Plot controls, composition plots, and parameter plots
+    - `sweep_tab.py`: Sweep analysis tab + plots
+    - `jv_tab.py`: JV curve selection + plotting
+
 ## Common Development Tasks
 
 ### Running the Application
 ```bash
-python pixelreader/66PIXEL.py
+python IVapp_66PIXEL.py
 ```
 
 ### Custom Header Patterns
@@ -150,4 +167,4 @@ Substrates are identified from filenames using patterns:
 
 ## File Structure Notes
 
-This is a single-file application optimized for perovskite solar cell array analysis. Unlike the main IV analyzer, this application handles multi-pixel, multi-composition datasets with sophisticated grouping and visualization capabilities. The flexible parsing system accommodates various data formats from different measurement systems.
+This is a modular application optimized for perovskite solar cell array analysis. Unlike the main IV analyzer, this application handles multi-pixel, multi-composition datasets with sophisticated grouping and visualization capabilities. The flexible parsing system accommodates various data formats from different measurement systems.
