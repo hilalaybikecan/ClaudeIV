@@ -69,6 +69,7 @@ class CompositionTabMixin:
         btns = ttk.Frame(table_frame); btns.grid(row=2, column=0, sticky="ew", pady=4)
         ttk.Button(btns, text="Remove Selected", command=self.remove_selected).grid(row=0, column=0, padx=2)
         ttk.Button(btns, text="Export table CSV", command=self.export_table_csv).grid(row=0, column=1, padx=2)
+        ttk.Button(btns, text="Clear all", command=self.clear_all_data).grid(row=0, column=2, padx=2)
 
 
     def load_file(self):
@@ -495,6 +496,48 @@ class CompositionTabMixin:
 
         self.refresh_table()
         self.refresh_plots()
+
+    def clear_all_data(self):
+        """Clear all loaded data and reset tables/plots."""
+        has_data = bool(self.data) or (self.df_with_flags is not None and not self.df_with_flags.empty)
+        if not has_data:
+            messagebox.showinfo("Clear all", "No data to clear.")
+            return
+
+        if not messagebox.askyesno("Clear all", "Clear all loaded data from the tables and plots?"):
+            return
+
+        self.data = []
+        self.df = None
+        self.df_with_flags = None
+        self._sweep_by_uid = {}
+        self._sort_column = None
+        self._sort_reverse = False
+
+        try:
+            self.substrate_cb["values"] = ["All"]
+            self.substrate_cb.set("All")
+        except Exception:
+            pass
+
+        try:
+            self.sweep_filter_cb["values"] = ["All"]
+            self.selected_sweep_filter.set("All")
+        except Exception:
+            pass
+
+        self.refresh_table()
+        self.refresh_plots()
+
+        try:
+            self.clear_jv_plot()
+        except AttributeError:
+            pass
+
+        try:
+            self._clear_sweep_ax("No parameter data loaded.")
+        except AttributeError:
+            pass
 
 
 

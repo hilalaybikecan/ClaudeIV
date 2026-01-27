@@ -1566,6 +1566,13 @@ class PlotTabMixin:
                     patch.set_edgecolor('black')
                     patch.set_linewidth(1.5)
 
+                # Add individual data points with jitter
+                for i, (gdata, pos) in enumerate(zip(grouped_data, positions)):
+                    jitter = np.random.uniform(-box_width * 0.3, box_width * 0.3, size=len(gdata))
+                    x_positions = np.full(len(gdata), pos) + jitter
+                    self.sweep_ax.scatter(x_positions, gdata, alpha=0.5, s=20,
+                                         color='black', edgecolors='none', zorder=3)
+
                 # Add mean values as text labels
                 for i, gdata in enumerate(grouped_data):
                     mean_val = np.mean(gdata)
@@ -1619,6 +1626,13 @@ class PlotTabMixin:
                     patch.set_alpha(0.7)
                     patch.set_edgecolor('black')
                     patch.set_linewidth(1.5)
+
+                # Add individual data points with jitter
+                for i, (gdata, pos) in enumerate(zip(grouped_data, positions)):
+                    jitter = np.random.uniform(-0.15, 0.15, size=len(gdata))
+                    x_positions = np.full(len(gdata), pos) + jitter
+                    self.sweep_ax.scatter(x_positions, gdata, alpha=0.5, s=20,
+                                         color='black', edgecolors='none', zorder=3)
 
                 # Add mean values as text labels
                 for i, gdata in enumerate(grouped_data):

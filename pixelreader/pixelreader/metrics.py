@@ -82,6 +82,6 @@ def compute_metrics(voltage: np.ndarray, current_A: np.ndarray, area_cm2: float,
         PCE_pct = (Pmpp_out / light_mw_cm2) * 100.0 
 
     # Report Jsc as positive mA/cm2 
-    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3
+    Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3 * (100 / light_mw_cm2)
 
     return Voc, Jsc_mAcm2, FF_pct, PCE_pct
