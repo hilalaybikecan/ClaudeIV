@@ -434,16 +434,27 @@ class CompositionTabMixin:
         )
 
 
-    def remove_selected(self):
-        """Delete selected measurements from the data"""
-        if self.df_with_flags is None or self.df_with_flags.empty: 
-            return
-        sel = self.tree.selection()
-        if not sel: 
-            return
+    def _remove_rows_by_indices(self, indices_to_remove, confirm_message: Optional[str] = None, refresh_plots: bool = True):
+        """Remove rows by dataframe indices and update all dependent data structures."""
+        if self.df_with_flags is None or self.df_with_flags.empty:
+            return 0
+        if not indices_to_remove:
+            return 0
 
-        # Get selected indices and sort in reverse order to delete from end first
-        indices_to_remove = sorted([int(iid) for iid in sel], reverse=True)
+        # Normalize and validate indices
+        cleaned = []
+        for i in indices_to_remove:
+            try:
+                cleaned.append(int(i))
+            except (TypeError, ValueError):
+                continue
+        indices_to_remove = sorted(set(cleaned), reverse=True)
+        indices_to_remove = [i for i in indices_to_remove if 0 <= i < len(self.df_with_flags)]
+        if not indices_to_remove:
+            return 0
+
+        if confirm_message and not messagebox.askyesno("Delete data", confirm_message):
+            return 0
 
         # Capture selected rows before mutating dataframes
         selected_rows = self.df_with_flags.loc[indices_to_remove].copy()
@@ -495,7 +506,21 @@ class CompositionTabMixin:
             self._rebuild_sweep_uid_map()
 
         self.refresh_table()
-        self.refresh_plots()
+        if refresh_plots:
+            self.refresh_plots()
+        return len(selected_rows)
+
+
+    def remove_selected(self):
+        """Delete selected measurements from the data"""
+        if self.df_with_flags is None or self.df_with_flags.empty:
+            return
+        sel = self.tree.selection()
+        if not sel:
+            return
+
+        indices_to_remove = [int(iid) for iid in sel]
+        self._remove_rows_by_indices(indices_to_remove, refresh_plots=True)
 
     def clear_all_data(self):
         """Clear all loaded data and reset tables/plots."""

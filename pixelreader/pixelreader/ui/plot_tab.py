@@ -162,6 +162,7 @@ class PlotTabMixin:
 
     def _reset_axes(self):
         """Fresh axes (remove any colorbar) so plots don't stack."""
+        self._pixel_map_active = False
         if getattr(self, "_cbar", None) is not None:
             try: self._cbar.remove()
             except Exception: pass
@@ -516,12 +517,14 @@ class PlotTabMixin:
 
         # Combine F/R or respect toggles
         if self.combine_fr.get():
+            delete_df = sdf
             grouped = sdf.groupby(["composition_index", "position_in_composition"], as_index=False)[metric].mean()
         else:
             keep = []
             if self.include_forward.get(): keep.append("forward")
             if self.include_reverse.get(): keep.append("reverse")
             if keep: sdf = sdf[sdf["direction"].isin(keep)]
+            delete_df = sdf
             grouped = sdf.groupby(["composition_index", "position_in_composition"], as_index=False)[metric].mean()
 
         mat = np.full((6, 11), np.nan, dtype=float)
@@ -554,6 +557,66 @@ class PlotTabMixin:
         self._cbar = self.fig.colorbar(im, ax=self.ax, fraction=0.046, pad=0.04, label=metric)
         self._apply_axis_limits()
         self.canvas.draw_idle()
+
+        # Build index map for deletion and enable double-click handler
+        self._pixel_map_index_map = {}
+        for idx, r in delete_df.iterrows():
+            try:
+                c = int(r["composition_index"])
+                p = int(r["position_in_composition"])
+            except Exception:
+                continue
+            if 1 <= c <= 11 and 1 <= p <= 6:
+                key = (p - 1, c - 1)
+                self._pixel_map_index_map.setdefault(key, []).append(int(idx))
+
+        self._pixel_map_substrate = sub
+        self._pixel_map_active = True
+
+        if getattr(self, "_pixel_map_click_cid", None) is not None:
+            try:
+                self.canvas.mpl_disconnect(self._pixel_map_click_cid)
+            except Exception:
+                pass
+        self._pixel_map_click_cid = self.canvas.mpl_connect("button_press_event", self._on_pixel_map_click)
+
+
+    def _on_pixel_map_click(self, event):
+        if not getattr(self, "_pixel_map_active", False):
+            return
+        if event.inaxes != self.ax:
+            return
+        if not getattr(event, "dblclick", False):
+            return
+        if event.xdata is None or event.ydata is None:
+            return
+
+        col = int(round(event.xdata))
+        row = int(round(event.ydata))
+        if row < 0 or row >= 6 or col < 0 or col >= 11:
+            return
+
+        indices = self._pixel_map_index_map.get((row, col), [])
+        if not indices:
+            return
+
+        sub = getattr(self, "_pixel_map_substrate", None)
+        comp = col + 1
+        pos = row + 1
+        count = len(indices)
+        msg = (
+            "Delete corresponding data-point(s)?\n"
+            f"Substrate S{sub}, Composition C{comp}, Position {pos}\n"
+            f"Rows to delete: {count}"
+        )
+
+        removed = self._remove_rows_by_indices(indices, confirm_message=msg, refresh_plots=False)
+        if removed:
+            try:
+                self.refresh_jv_selection_table()
+            except AttributeError:
+                pass
+            self.plot_substrate_pixel_map()
 
 
     def plot_substrate_composition_boxplot(self):
