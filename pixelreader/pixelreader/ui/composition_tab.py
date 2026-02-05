@@ -213,7 +213,9 @@ class CompositionTabMixin:
         values = ["All"] + [str(s) for s in subs_unique]
         self.substrate_cb["values"] = values
         cur = self.substrate_cb.get()
-        self.substrate_cb.set(cur if cur in values else "All")
+        # Default to first substrate instead of "All" to enable pixel map view
+        default = str(subs_unique[0]) if subs_unique else "All"
+        self.substrate_cb.set(cur if cur in values else default)
 
 
     def _populate_sweep_filter_combo(self):

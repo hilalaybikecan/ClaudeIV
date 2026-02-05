@@ -111,11 +111,13 @@ class PlotTabMixin:
         ttk.Entry(plot_left, textvariable=self.sub_comp_selection_var, width=20).grid(row=38, column=0, sticky="ew", pady=2)
         ttk.Button(plot_left, text="Manual Pixel Plot", command=self.plot_substrate_composition_boxplot).grid(row=39, column=0, sticky="ew")
 
-        # Right panel - Plot display with scrollbars
+        # Right panel - Plot display with scrollbars (split into heatmap and JV curve)
         plot_right = ttk.Frame(self.plot_frame, padding=8); plot_right.grid(row=0, column=1, sticky="nsew")
-        plot_right.rowconfigure(0, weight=1); plot_right.columnconfigure(0, weight=1)
+        plot_right.rowconfigure(0, weight=1)
+        plot_right.columnconfigure(0, weight=2)  # Heatmap column
+        plot_right.columnconfigure(1, weight=1)  # JV curve column
 
-        # Create a container frame for the plot with scrollbars
+        # Left side: Heatmap/main plot with scrollbars
         plot_container = ttk.Frame(plot_right)
         plot_container.grid(row=0, column=0, sticky="nsew")
         plot_container.rowconfigure(0, weight=1)
@@ -149,8 +151,25 @@ class PlotTabMixin:
 
         self.plot_inner_frame.bind("<Configure>", configure_scroll_region)
 
-        # Plot buttons below the figure
-        plot_btns = ttk.Frame(plot_right); plot_btns.grid(row=1, column=0, sticky="ew", pady=4)
+        # Right side: JV curve display panel
+        jv_panel = ttk.LabelFrame(plot_right, text="JV Curve (click pixel to display)", padding=8)
+        jv_panel.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        jv_panel.rowconfigure(0, weight=1)
+        jv_panel.columnconfigure(0, weight=1)
+
+        # Create matplotlib figure for JV curves
+        self.jv_curve_fig = Figure(figsize=(4, 2), dpi=100)
+        self.jv_curve_ax = self.jv_curve_fig.add_subplot(111)
+        self.jv_curve_ax.set_xlabel("Voltage (V)")
+        self.jv_curve_ax.set_ylabel("Current Density (mA/cm²)")
+        self.jv_curve_ax.set_title("Select a pixel to view JV curve")
+        self.jv_curve_ax.grid(True, alpha=0.3)
+
+        self.jv_curve_canvas = FigureCanvasTkAgg(self.jv_curve_fig, master=jv_panel)
+        self.jv_curve_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+        # Plot buttons below the figure (spans both columns)
+        plot_btns = ttk.Frame(plot_right); plot_btns.grid(row=1, column=0, columnspan=2, sticky="ew", pady=4)
         ttk.Button(plot_btns, text="Boxplot by composition/group", command=self.plot_boxplot_groups).grid(row=0, column=0, padx=4)
         ttk.Button(plot_btns, text="Heatmap (substrate × group)", command=self.plot_heatmap).grid(row=0, column=1, padx=4)
         ttk.Button(plot_btns, text="Substrate pixel map", command=self.plot_substrate_pixel_map).grid(row=0, column=2, padx=4)
@@ -249,7 +268,15 @@ class PlotTabMixin:
 
 
     def refresh_plots(self):
-        self.plot_boxplot_groups()
+        # Default to substrate pixel map if a single substrate is selected
+        sel = self.substrate_cb.get()
+        if sel and sel != "All":
+            # Single substrate selected - show pixel map as default
+            self.plot_substrate_pixel_map()
+        else:
+            # Multiple substrates or "All" - show boxplot
+            self.plot_boxplot_groups()
+
         # Also refresh JV selection table when plots are refreshed
         try:
             self.refresh_jv_selection_table()
@@ -586,8 +613,6 @@ class PlotTabMixin:
             return
         if event.inaxes != self.ax:
             return
-        if not getattr(event, "dblclick", False):
-            return
         if event.xdata is None or event.ydata is None:
             return
 
@@ -596,13 +621,20 @@ class PlotTabMixin:
         if row < 0 or row >= 6 or col < 0 or col >= 11:
             return
 
+        sub = getattr(self, "_pixel_map_substrate", None)
+        comp = col + 1
+        pos = row + 1
+
+        # Single click: display JV curve
+        if not getattr(event, "dblclick", False):
+            self._plot_jv_for_pixel(sub, comp, pos)
+            return
+
+        # Double click: delete data point
         indices = self._pixel_map_index_map.get((row, col), [])
         if not indices:
             return
 
-        sub = getattr(self, "_pixel_map_substrate", None)
-        comp = col + 1
-        pos = row + 1
         count = len(indices)
         msg = (
             "Delete corresponding data-point(s)?\n"
@@ -617,6 +649,86 @@ class PlotTabMixin:
             except AttributeError:
                 pass
             self.plot_substrate_pixel_map()
+
+
+    def _plot_jv_for_pixel(self, substrate: int, composition: int, position: int):
+        """
+        Plot the JV curves (forward and reverse) for a specific pixel.
+
+        Args:
+            substrate: Substrate number
+            composition: Composition index (1-11)
+            position: Position in composition (1-6)
+        """
+        # Clear the JV curve axes
+        self.jv_curve_ax.clear()
+
+        # Find matching sweeps from the raw data
+        matching_sweeps = []
+        for sweep in self.data:
+            if (sweep.substrate == substrate and
+                sweep.composition_index == composition and
+                sweep.position_in_composition == position):
+                matching_sweeps.append(sweep)
+
+        if not matching_sweeps:
+            self.jv_curve_ax.set_title(f"No data for S{substrate} C{composition} P{position}")
+            self.jv_curve_ax.set_xlabel("Voltage (V)")
+            self.jv_curve_ax.set_ylabel("Current Density (mA/cm²)")
+            self.jv_curve_ax.grid(True, alpha=0.3)
+            self.jv_curve_canvas.draw_idle()
+            return
+
+        # Separate forward and reverse sweeps
+        forward_sweeps = [s for s in matching_sweeps if s.direction == "forward"]
+        reverse_sweeps = [s for s in matching_sweeps if s.direction == "reverse"]
+
+        # Plot forward sweeps in blue
+        for i, sweep in enumerate(forward_sweeps):
+            # Convert current to current density (mA/cm²)
+            j_mAcm2 = (sweep.current_A / sweep.area_cm2) * 1000
+            label = f"Forward" if i == 0 else None
+            self.jv_curve_ax.plot(sweep.voltage, j_mAcm2, 'b-', linewidth=1.5,
+                                  label=label, alpha=0.8)
+
+        # Plot reverse sweeps in red
+        for i, sweep in enumerate(reverse_sweeps):
+            # Convert current to current density (mA/cm²)
+            j_mAcm2 = (sweep.current_A / sweep.area_cm2) * 1000
+            label = f"Reverse" if i == 0 else None
+            self.jv_curve_ax.plot(sweep.voltage, j_mAcm2, 'r-', linewidth=1.5,
+                                  label=label, alpha=0.8)
+
+        # Format the plot
+        self.jv_curve_ax.set_xlabel("Voltage (V)", fontsize=10)
+        self.jv_curve_ax.set_ylabel("Current Density (mA/cm²)", fontsize=10)
+        self.jv_curve_ax.set_title(f"S{substrate} C{composition} P{position}", fontsize=11, fontweight='bold')
+        self.jv_curve_ax.grid(True, alpha=0.3)
+        self.jv_curve_ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
+        self.jv_curve_ax.axvline(x=0, color='k', linestyle='-', linewidth=0.5)
+        self.jv_curve_ax.set_ylim([-25,5])
+        # Add legend if we have data
+        if forward_sweeps or reverse_sweeps:
+            self.jv_curve_ax.legend(loc='best', fontsize=9)
+
+        # Add metrics annotation if available
+        metrics_text = []
+        for sweep in matching_sweeps[:2]:  # Show metrics for up to 2 sweeps
+            if sweep.PCE_pct is not None:
+                dir_label = "F" if sweep.direction == "forward" else "R"
+                metrics_text.append(
+                    f"{dir_label}: Voc={sweep.Voc:.3f}V, Jsc={sweep.Jsc_mAcm2:.2f}mA/cm², "
+                    f"FF={sweep.FF_pct:.1f}%, PCE={sweep.PCE_pct:.2f}%"
+                )
+
+        if metrics_text:
+            self.jv_curve_ax.text(0.02, 0.02, "\n".join(metrics_text),
+                                  transform=self.jv_curve_ax.transAxes,
+                                  fontsize=8, verticalalignment='bottom',
+                                  bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.8))
+
+        self.jv_curve_fig.tight_layout()
+        self.jv_curve_canvas.draw_idle()
 
 
     def plot_substrate_composition_boxplot(self):
