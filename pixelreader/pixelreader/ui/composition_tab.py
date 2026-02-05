@@ -11,7 +11,7 @@ from tkinter import filedialog, messagebox, ttk
 
 from pixelreader.conditions import analyze_sweep_parameters, load_experimental_conditions, map_sweeps_to_conditions
 from pixelreader.grouping import comp_to_group
-from pixelreader.metrics import compute_metrics
+from pixelreader.metrics import compute_metrics, compute_rsc
 from pixelreader.models import JVSweep
 from pixelreader.parsing import build_sweeps_from_file
 
@@ -53,7 +53,7 @@ class CompositionTabMixin:
         right.rowconfigure(0, weight=1); right.columnconfigure(0, weight=1)
 
         table_frame = ttk.Frame(right); table_frame.grid(row=0, column=0, sticky="nsew")
-        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "avPCE_pct")
+        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "Rsc_ohmcm2", "avPCE_pct")
         self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="extended")
         for c in columns:
             # All columns are now sortable
@@ -196,6 +196,7 @@ class CompositionTabMixin:
                 "Jsc_mAcm2": s.Jsc_mAcm2,
                 "FF_pct": s.FF_pct,
                 "PCE_pct": s.PCE_pct,
+                "Rsc_ohmcm2": getattr(s, "Rsc_ohmcm2", None),
                 "sweep_id": s.sweep_id,
                 "condition_name": s.condition_name
             })
@@ -370,7 +371,8 @@ class CompositionTabMixin:
             "Jsc_mAcm2": "Jsc_mAcm2",
             "FF_pct": "FF_pct",
             "PCE_pct": "PCE_pct",
-            "avPCE_pct": "avPCE_pct"
+            "avPCE_pct": "avPCE_pct",
+            "Rsc_ohmcm2": "Rsc_ohmcm2"
         }
         
         if column in column_map:
@@ -388,7 +390,7 @@ class CompositionTabMixin:
 
     def update_column_headers(self):
         """Update column headers to show current sort direction"""
-        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "avPCE_pct")
+        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "Rsc_ohmcm2", "avPCE_pct")
 
         for c in columns:
             if c == self._sort_column:
@@ -402,8 +404,9 @@ class CompositionTabMixin:
         self.tree.delete(*self.tree.get_children())
         if self.df_with_flags is None or self.df_with_flags.empty: return
 
-        # Compute average PCE for each substrate+pixel_id combination
+        # Compute average PCE and Rsc for each substrate+pixel_id combination
         self._compute_average_pce()
+        self._compute_average_rsc()
 
         for idx, r in self.df_with_flags.iterrows():
             vals = (
@@ -417,6 +420,7 @@ class CompositionTabMixin:
                 None if pd.isna(r["Jsc_mAcm2"]) else round(float(r["Jsc_mAcm2"]), 2),
                 None if pd.isna(r["FF_pct"]) else round(float(r["FF_pct"]), 1),
                 None if pd.isna(r["PCE_pct"]) else round(float(r["PCE_pct"]), 2),
+                None if pd.isna(r.get("Rsc_ohmcm2")) else round(float(r["Rsc_ohmcm2"]), 2),
                 None if pd.isna(r.get("avPCE_pct")) else round(float(r["avPCE_pct"]), 2),
             )
             self.tree.insert("", "end", iid=str(idx), values=vals)
@@ -434,6 +438,29 @@ class CompositionTabMixin:
             lambda row: avg_pce.get((row["substrate"], row["pixel_id"]), np.nan),
             axis=1
         )
+
+
+    def _compute_average_rsc(self):
+        """Compute average Rsc for each substrate+pixel_id (+sweep if available) combination."""
+        if self.df_with_flags is None or self.df_with_flags.empty:
+            return
+        if "Rsc_ohmcm2" not in self.df_with_flags.columns:
+            return
+
+        group_cols = ["substrate", "pixel_id"]
+        if "sweep_id" in self.df_with_flags.columns:
+            group_cols.append("sweep_id")
+        if "condition_name" in self.df_with_flags.columns:
+            if self.df_with_flags["condition_name"].notna().any():
+                group_cols.append("condition_name")
+
+        try:
+            averaged = self.df_with_flags.groupby(group_cols, dropna=False)["Rsc_ohmcm2"].transform("mean")
+        except TypeError:
+            group_key = self.df_with_flags[group_cols].astype(str).agg("|".join, axis=1)
+            averaged = self.df_with_flags.groupby(group_key)["Rsc_ohmcm2"].transform("mean")
+
+        self.df_with_flags["Rsc_ohmcm2"] = averaged
 
 
     def _remove_rows_by_indices(self, indices_to_remove, confirm_message: Optional[str] = None, refresh_plots: bool = True):
@@ -578,7 +605,7 @@ class CompositionTabMixin:
         df_to_export = self._filtered_df()
 
         # Group by substrate and composition_index, then calculate means for numerical columns
-        numerical_cols = ["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"]
+        numerical_cols = ["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "Rsc_ohmcm2"]
         grouping_cols = ["substrate", "composition_index"]
 
         # Calculate aggregated metrics - both mean and max
@@ -625,7 +652,8 @@ class CompositionTabMixin:
         for s in self.data:
             s.area_cm2 = area; s.light_mw_cm2 = pin
             Voc, Jsc_mAcm2, FF_pct, PCE_pct = compute_metrics(s.voltage, s.current_A, area_cm2=area, light_mw_cm2=pin)
-            s.Voc, s.Jsc_mAcm2, s.FF_pct, s.PCE_pct = Voc, Jsc_mAcm2, FF_pct, PCE_pct
+            Rsc_ohmcm2 = compute_rsc(s.voltage, s.current_A, area_cm2=area)
+            s.Voc, s.Jsc_mAcm2, s.FF_pct, s.PCE_pct, s.Rsc_ohmcm2 = Voc, Jsc_mAcm2, FF_pct, PCE_pct, Rsc_ohmcm2
         rows = []
         for s in self.data:
             rows.append({
@@ -639,6 +667,7 @@ class CompositionTabMixin:
                 "Jsc_mAcm2": s.Jsc_mAcm2,
                 "FF_pct": s.FF_pct,
                 "PCE_pct": s.PCE_pct,
+                "Rsc_ohmcm2": getattr(s, "Rsc_ohmcm2", None),
                 "sweep_id": s.sweep_id,
                 "condition_name": s.condition_name
             })

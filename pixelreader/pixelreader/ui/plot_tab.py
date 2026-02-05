@@ -43,7 +43,7 @@ class PlotTabMixin:
         ttk.Separator(plot_left).grid(row=6, column=0, sticky="ew", pady=6)
         ttk.Label(plot_left, text="Plot Parameters").grid(row=7, column=0, sticky="w")
         ttk.Label(plot_left, text="Metric:").grid(row=8, column=0, sticky="w", pady=(4, 0))
-        metric_cb = ttk.Combobox(plot_left, textvariable=self.metric_choice, values=["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"], state="readonly", width=12)
+        metric_cb = ttk.Combobox(plot_left, textvariable=self.metric_choice, values=["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "Rsc_ohmcm2"], state="readonly", width=12)
         metric_cb.grid(row=9, column=0, sticky="ew"); metric_cb.bind("<<ComboboxSelected>>", lambda e: self.refresh_plots())
 
         ttk.Label(plot_left, text="Aggregation:").grid(row=10, column=0, sticky="w", pady=(4, 0))
@@ -554,6 +554,10 @@ class PlotTabMixin:
             delete_df = sdf
             grouped = sdf.groupby(["composition_index", "position_in_composition"], as_index=False)[metric].mean()
 
+        # Persist the exact rows behind this pixel map so click-to-plot can use the same filtered dataset.
+        self._pixel_map_delete_df = delete_df
+        self._pixel_map_metric = metric
+
         mat = np.full((6, 11), np.nan, dtype=float)
         for _, r in grouped.iterrows():
             c = int(r["composition_index"]); p = int(r["position_in_composition"])
@@ -627,7 +631,11 @@ class PlotTabMixin:
 
         # Single click: display JV curve
         if not getattr(event, "dblclick", False):
-            self._plot_jv_for_pixel(sub, comp, pos)
+            indices = self._pixel_map_index_map.get((row, col), [])
+            if indices:
+                self._plot_jv_for_pixel_indices(sub, comp, pos, indices)
+            else:
+                self._plot_jv_for_pixel(sub, comp, pos)
             return
 
         # Double click: delete data point
@@ -651,6 +659,144 @@ class PlotTabMixin:
             self.plot_substrate_pixel_map()
 
 
+    def _plot_jv_for_pixel_indices(self, substrate: int, composition: int, position: int, indices: List[int]):
+        """
+        Plot JV curves for the clicked pixel using the exact DataFrame rows backing that heatmap cell.
+
+        This keeps click-to-plot consistent with the pixel-map filters (sweep filter, discard edges, and
+        F/R toggles) and avoids confusing mismatches when the heatmap is based on a filtered DataFrame.
+        """
+        self.jv_curve_ax.clear()
+
+        df = getattr(self, "_pixel_map_delete_df", None)
+        if df is None or getattr(df, "empty", True):
+            df = self._filtered_df()
+
+        sweep_by_uid = getattr(self, "_sweep_by_uid", {}) or {}
+        matching_sweeps = []
+
+        rows = None
+        try:
+            rows = df.loc[indices]
+            if isinstance(rows, pd.Series):
+                rows = rows.to_frame().T
+        except Exception:
+            rows = None
+
+        # Prefer exact lookup via sweep_uid (stable across sorting/filtering).
+        if rows is not None and not rows.empty and "sweep_uid" in rows.columns:
+            for uid in rows["sweep_uid"].dropna().tolist():
+                try:
+                    sweep = sweep_by_uid.get(int(uid))
+                except Exception:
+                    sweep = None
+                if sweep is not None:
+                    matching_sweeps.append(sweep)
+
+        # Fallback: attribute match against raw sweep list (should rarely be needed).
+        if not matching_sweeps:
+            for sweep in self.data:
+                if (
+                    sweep.substrate == substrate
+                    and sweep.composition_index == composition
+                    and sweep.position_in_composition == position
+                ):
+                    matching_sweeps.append(sweep)
+
+        # De-dupe while preserving order
+        seen = set()
+        deduped = []
+        for s in matching_sweeps:
+            sid = id(s)
+            if sid in seen:
+                continue
+            seen.add(sid)
+            deduped.append(s)
+        matching_sweeps = deduped
+
+        if not matching_sweeps:
+            # If the heatmap had a numeric value, it came from the per-row metric table (df) for this cell.
+            metric = getattr(self, "_pixel_map_metric", None)
+            metric_val = None
+            if rows is not None and metric and metric in rows.columns:
+                try:
+                    vals = pd.to_numeric(rows[metric], errors="coerce").dropna()
+                    if not vals.empty:
+                        metric_val = float(vals.mean())
+                except Exception:
+                    metric_val = None
+
+            extra = f" ({metric}~{metric_val:.2f})" if metric_val is not None else ""
+            self.jv_curve_ax.set_title(f"No JV data for S{substrate} C{composition} P{position}{extra}")
+            self.jv_curve_ax.set_xlabel("Voltage (V)")
+            self.jv_curve_ax.set_ylabel("Current Density (mA/cm^2)")
+            self.jv_curve_ax.grid(True, alpha=0.3)
+            self.jv_curve_canvas.draw_idle()
+            return
+
+        self._plot_jv_sweeps(matching_sweeps, substrate, composition, position)
+
+
+    def _plot_jv_sweeps(self, matching_sweeps: List, substrate: int, composition: int, position: int):
+        """Common JV plotting implementation for a list of sweeps."""
+        self.jv_curve_ax.clear()
+
+        # Separate forward and reverse sweeps
+        forward_sweeps = [s for s in matching_sweeps if s.direction == "forward"]
+        reverse_sweeps = [s for s in matching_sweeps if s.direction == "reverse"]
+
+        # Plot forward sweeps in blue
+        for i, sweep in enumerate(forward_sweeps):
+            # Convert current to current density (mA/cm^2)
+            j_mAcm2 = (sweep.current_A / sweep.area_cm2) * 1000
+            label = "Forward" if i == 0 else None
+            self.jv_curve_ax.plot(sweep.voltage, j_mAcm2, "b-", linewidth=1.5, label=label, alpha=0.8)
+
+        # Plot reverse sweeps in red
+        for i, sweep in enumerate(reverse_sweeps):
+            # Convert current to current density (mA/cm^2)
+            j_mAcm2 = (sweep.current_A / sweep.area_cm2) * 1000
+            label = "Reverse" if i == 0 else None
+            self.jv_curve_ax.plot(sweep.voltage, j_mAcm2, "r-", linewidth=1.5, label=label, alpha=0.8)
+
+        # Format the plot
+        self.jv_curve_ax.set_xlabel("Voltage (V)", fontsize=10)
+        self.jv_curve_ax.set_ylabel("Current Density (mA/cm^2)", fontsize=10)
+        self.jv_curve_ax.set_title(f"S{substrate} C{composition} P{position}", fontsize=11, fontweight="bold")
+        self.jv_curve_ax.grid(True, alpha=0.3)
+        self.jv_curve_ax.axhline(y=0, color="k", linestyle="-", linewidth=0.5)
+        self.jv_curve_ax.axvline(x=0, color="k", linestyle="-", linewidth=0.5)
+        self.jv_curve_ax.set_ylim([-25, 5])
+
+        # Add legend if we have data
+        if forward_sweeps or reverse_sweeps:
+            self.jv_curve_ax.legend(loc="best", fontsize=9)
+
+        # Add metrics annotation if available
+        metrics_text = []
+        for sweep in matching_sweeps[:2]:  # Show metrics for up to 2 sweeps
+            if sweep.PCE_pct is not None:
+                dir_label = "F" if sweep.direction == "forward" else "R"
+                metrics_text.append(
+                    f"{dir_label}: Voc={sweep.Voc:.3f}V, Jsc={sweep.Jsc_mAcm2:.2f}mA/cm^2, "
+                    f"FF={sweep.FF_pct:.1f}%, PCE={sweep.PCE_pct:.2f}%"
+                )
+
+        if metrics_text:
+            self.jv_curve_ax.text(
+                0.02,
+                0.02,
+                "\n".join(metrics_text),
+                transform=self.jv_curve_ax.transAxes,
+                fontsize=8,
+                verticalalignment="bottom",
+                bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.8),
+            )
+
+        self.jv_curve_fig.tight_layout()
+        self.jv_curve_canvas.draw_idle()
+
+
     def _plot_jv_for_pixel(self, substrate: int, composition: int, position: int):
         """
         Plot the JV curves (forward and reverse) for a specific pixel.
@@ -660,6 +806,28 @@ class PlotTabMixin:
             composition: Composition index (1-11)
             position: Position in composition (1-6)
         """
+        matching_sweeps = [
+            sweep
+            for sweep in self.data
+            if (
+                sweep.substrate == substrate
+                and sweep.composition_index == composition
+                and sweep.position_in_composition == position
+            )
+        ]
+
+        if not matching_sweeps:
+            self.jv_curve_ax.clear()
+            self.jv_curve_ax.set_title(f"No data for S{substrate} C{composition} P{position}")
+            self.jv_curve_ax.set_xlabel("Voltage (V)")
+            self.jv_curve_ax.set_ylabel("Current Density (mA/cm^2)")
+            self.jv_curve_ax.grid(True, alpha=0.3)
+            self.jv_curve_canvas.draw_idle()
+            return
+
+        self._plot_jv_sweeps(matching_sweeps, substrate, composition, position)
+        return
+
         # Clear the JV curve axes
         self.jv_curve_ax.clear()
 
@@ -864,7 +1032,7 @@ class PlotTabMixin:
             all_columns = self.parameter_data.columns.tolist()
 
             # Performance metrics that are always available from JV data
-            performance_metrics = ["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"]
+            performance_metrics = ["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "Rsc_ohmcm2"]
 
             # Combine parameter columns with performance metrics for Y-axis
             y_axis_options = performance_metrics + all_columns
@@ -1199,7 +1367,8 @@ class PlotTabMixin:
                 'Voc': 'Open Circuit Voltage (V)',
                 'Jsc_mAcm2': 'Short Circuit Current Density (mA/cm²)',
                 'FF_pct': 'Fill Factor (%)',
-                'PCE_pct': 'Power Conversion Efficiency (%)'
+                'PCE_pct': 'Power Conversion Efficiency (%)',
+                'Rsc_ohmcm2': 'Shunt Resistance (ohm*cm^2)'
             }
 
             self.sweep_ax.set_xlabel('Parameter Groups', fontsize=12, fontweight='bold')
@@ -1267,7 +1436,7 @@ class PlotTabMixin:
         metric = self.y_param_var.get()
 
         # Build list of valid options: performance metrics + parameter columns
-        valid_metrics = ['Voc', 'Jsc_mAcm2', 'FF_pct', 'PCE_pct']
+        valid_metrics = ['Voc', 'Jsc_mAcm2', 'FF_pct', 'PCE_pct', 'Rsc_ohmcm2']
         if self.parameter_data is not None:
             valid_metrics.extend(self.parameter_data.columns.tolist())
 
@@ -1674,7 +1843,8 @@ class PlotTabMixin:
                 'Voc': 'Open Circuit Voltage (V)',
                 'Jsc_mAcm2': 'Short Circuit Current Density (mA/cm²)',
                 'FF_pct': 'Fill Factor (%)',
-                'PCE_pct': 'Power Conversion Efficiency (%)'
+                'PCE_pct': 'Power Conversion Efficiency (%)',
+                'Rsc_ohmcm2': 'Shunt Resistance (ohm*cm^2)'
             }
 
             x_label = x_param.replace(' (M)', '').replace(' (mg/mL)', '')
@@ -1845,7 +2015,7 @@ class PlotTabMixin:
                 important_cols.append(color_param)
 
             # Add performance metrics if available
-            perf_metrics = ['Voc', 'Jsc_mAcm2', 'FF_pct', 'PCE_pct']
+            perf_metrics = ['Voc', 'Jsc_mAcm2', 'FF_pct', 'PCE_pct', 'Rsc_ohmcm2']
             for metric in perf_metrics:
                 if metric in numeric_cols and metric not in important_cols:
                     important_cols.append(metric)

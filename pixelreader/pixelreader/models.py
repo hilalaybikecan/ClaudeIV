@@ -21,6 +21,7 @@ class JVSweep:
     Jsc_mAcm2: Optional[float] = None  # positive, mA/cm2
     FF_pct: Optional[float] = None     # 0-100 %
     PCE_pct: Optional[float] = None    # 0-100 %
+    Rsc_ohmcm2: Optional[float] = None  # shunt resistance near 0V (ohm*cm^2)
     # Experimental conditions (will be populated from Excel)
     sweep_id: Optional[int] = None
     condition_name: Optional[str] = None

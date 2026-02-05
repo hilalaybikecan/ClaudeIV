@@ -34,7 +34,7 @@ class JVTabMixin:
         jv_left.columnconfigure(0, weight=1)
         
         # Table showing filtered data for selection (same format as main table)
-        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "avPCE_pct")
+        columns = ("substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "Rsc_ohmcm2", "avPCE_pct")
         self.jv_selection_tree = ttk.Treeview(selection_frame, columns=columns, show="headings",
                                              selectmode="extended", height=8)
         # Initialize sorting state
@@ -171,6 +171,7 @@ class JVTabMixin:
                 None if pd.isna(r["Jsc_mAcm2"]) else round(float(r["Jsc_mAcm2"]), 2),
                 None if pd.isna(r["FF_pct"]) else round(float(r["FF_pct"]), 1),
                 None if pd.isna(r["PCE_pct"]) else round(float(r["PCE_pct"]), 2),
+                None if pd.isna(r.get("Rsc_ohmcm2")) else round(float(r["Rsc_ohmcm2"]), 2),
                 None if pd.isna(r.get("avPCE_pct")) else round(float(r["avPCE_pct"]), 2),
             )
             # Use sweep uid when available for stable lookups
@@ -213,7 +214,8 @@ class JVTabMixin:
             "Jsc_mAcm2": "Jsc_mAcm2",
             "FF_pct": "FF_pct",
             "PCE_pct": "PCE_pct",
-            "avPCE_pct": "avPCE_pct"
+            "avPCE_pct": "avPCE_pct",
+            "Rsc_ohmcm2": "Rsc_ohmcm2"
         }
         
         if column in column_map:
@@ -247,6 +249,7 @@ class JVTabMixin:
                         None if pd.isna(r["Jsc_mAcm2"]) else round(float(r["Jsc_mAcm2"]), 2),
                         None if pd.isna(r["FF_pct"]) else round(float(r["FF_pct"]), 1),
                         None if pd.isna(r["PCE_pct"]) else round(float(r["PCE_pct"]), 2),
+                        None if pd.isna(r.get("Rsc_ohmcm2")) else round(float(r["Rsc_ohmcm2"]), 2),
                         None if pd.isna(r.get("avPCE_pct")) else round(float(r["avPCE_pct"]), 2),
                     )
                     # Use a unique key based on identifying attributes (not DataFrame index)
@@ -264,7 +267,7 @@ class JVTabMixin:
                     self.jv_selection_tree.insert("", "end", iid=item_key, values=vals)
 
                 # Update column headers to show sort direction
-                for col in ["substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "avPCE_pct"]:
+                for col in ["substrate", "pixel_id", "comp", "group", "pos", "dir", "Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "Rsc_ohmcm2", "avPCE_pct"]:
                     if col == column:
                         arrow = " ↓" if self._jv_sort_reverse else " ↑"
                         self.jv_selection_tree.heading(col, text=f"{col}{arrow}")

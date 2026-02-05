@@ -85,3 +85,41 @@ def compute_metrics(voltage: np.ndarray, current_A: np.ndarray, area_cm2: float,
     Jsc_mAcm2 = None if Jsc_Acm2 is None else abs(Jsc_Acm2) * 1e3 * (100 / light_mw_cm2)
 
     return Voc, Jsc_mAcm2, FF_pct, PCE_pct
+
+
+def compute_rsc(voltage: np.ndarray, current_A: np.ndarray, area_cm2: float, window_V: float = 0.05):
+    """
+    Compute shunt resistance around short-circuit (V=0) by linear fit to J-V
+    in +/- window_V. Returns Rsc in ohm*cm^2.
+    """
+    if len(voltage) < 2:
+        return None
+
+    order = np.argsort(voltage)
+    V = voltage[order]
+    I = current_A[order]
+
+    # Current density A/cm2
+    J_Acm2 = I / max(area_cm2, 1e-12)
+
+    mask = (V >= -window_V) & (V <= window_V)
+    if np.count_nonzero(mask) < 2:
+        return None
+
+    Vw = V[mask]
+    Jw = J_Acm2[mask]
+    if np.ptp(Vw) == 0:
+        return None
+
+    try:
+        slope, _intercept = np.polyfit(Vw, Jw, 1)
+    except Exception:
+        return None
+
+    if not np.isfinite(slope) or abs(slope) < 1e-12:
+        return None
+
+    rsc = 1.0 / slope  # V / (A/cm2) = ohm*cm2
+    if not np.isfinite(rsc):
+        return None
+    return float(abs(rsc))

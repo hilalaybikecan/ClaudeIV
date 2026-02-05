@@ -6,7 +6,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
-from .metrics import compute_metrics
+from .metrics import compute_metrics, compute_rsc
 from .models import JVSweep
 
 DEFAULT_HEADER_REGEX = r"^\s*(\d+)\s*[_-]\s*(\d+)\s*.*$"  # POSITION_COMPOSITION (e.g., "3_10" or "3-10")
@@ -130,6 +130,7 @@ def build_sweeps_from_file(
             fv = np.asarray(fV, float)
             fi = np.asarray(fI, float)
             Voc, Jsc_mAcm2, FF_pct, PCE_pct = compute_metrics(fv, fi, area_cm2, light_mw_cm2)
+            Rsc_ohmcm2 = compute_rsc(fv, fi, area_cm2)
             sweeps.append(
                 JVSweep(
                     substrate_id,
@@ -145,12 +146,14 @@ def build_sweeps_from_file(
                     Jsc_mAcm2,
                     FF_pct,
                     PCE_pct,
+                    Rsc_ohmcm2,
                 )
             )
         if len(rV) >= 2:
             rv = np.asarray(rV, float)
             ri = np.asarray(rI, float)
             Voc, Jsc_mAcm2, FF_pct, PCE_pct = compute_metrics(rv, ri, area_cm2, light_mw_cm2)
+            Rsc_ohmcm2 = compute_rsc(rv, ri, area_cm2)
             sweeps.append(
                 JVSweep(
                     substrate_id,
@@ -166,6 +169,7 @@ def build_sweeps_from_file(
                     Jsc_mAcm2,
                     FF_pct,
                     PCE_pct,
+                    Rsc_ohmcm2,
                 )
             )
 
