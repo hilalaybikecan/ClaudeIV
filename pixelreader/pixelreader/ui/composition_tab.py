@@ -598,50 +598,118 @@ class CompositionTabMixin:
     def export_table_csv(self):
         if self.df_with_flags is None or self.df_with_flags.empty:
             messagebox.showinfo("Export", "No data to export."); return
-        path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
-        if not path: return
 
-        # Use filtered data (respects sweep filter, F/R toggles, and threshold filters)
-        df_to_export = self._filtered_df()
-
-        # Group by substrate and composition_index, then calculate means for numerical columns
         numerical_cols = ["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "Rsc_ohmcm2"]
-        grouping_cols = ["substrate", "composition_index"]
 
-        # Calculate aggregated metrics - both mean and max
-        aggregated_mean = df_to_export.groupby(grouping_cols)[numerical_cols].mean().reset_index()
-        aggregated_max = df_to_export.groupby(grouping_cols)[numerical_cols].max().reset_index()
+        top = tk.Toplevel(self); top.title("Export Options")
+        top.resizable(False, False)
+        top.grab_set()
 
-        # Merge mean and max data
-        aggregated = aggregated_mean.copy()
+        # --- Export mode ---
+        ttk.Label(top, text="Export mode:", font=("", 9, "bold")).grid(
+            row=0, column=0, columnspan=3, sticky="w", padx=8, pady=(8, 2))
 
-        # Add max columns with "_max" suffix
-        for col in numerical_cols:
-            aggregated[f"{col}_max"] = aggregated_max[col]
+        mode_var = tk.IntVar(value=1)  # default: by composition
+        modes = [("Raw (per-measurement)", 0),
+                 ("Aggregated by composition (1-11)", 1),
+                 ("Aggregated by group (1-9)", 2)]
+        for i, (label, val) in enumerate(modes):
+            ttk.Radiobutton(top, text=label, variable=mode_var, value=val,
+                            command=lambda: _toggle_stats()).grid(
+                row=1 + i, column=0, columnspan=3, sticky="w", padx=20)
 
-        # Rename mean columns with "_mean" suffix for clarity
-        for col in numerical_cols:
-            aggregated[f"{col}_mean"] = aggregated[col]
-            aggregated.drop(columns=[col], inplace=True)
+        # --- Statistics checkboxes ---
+        ttk.Label(top, text="Statistics (aggregated modes):", font=("", 9, "bold")).grid(
+            row=4, column=0, columnspan=3, sticky="w", padx=8, pady=(10, 2))
 
-        # Also include group_index for consistency
-        aggregated["group_index"] = aggregated["composition_index"].apply(comp_to_group)
+        stat_defs = [("Mean", "mean"), ("Max", "max"), ("Median", "median"),
+                     ("Std", "std"), ("Min", "min")]
+        stat_vars: Dict[str, tk.BooleanVar] = {}
+        stat_cbs: list = []
+        for i, (label, key) in enumerate(stat_defs):
+            var = tk.BooleanVar(value=(key in ("mean", "max")))
+            stat_vars[key] = var
+            cb = ttk.Checkbutton(top, text=label, variable=var)
+            cb.grid(row=5, column=i, sticky="w", padx=(20 if i == 0 else 6))
+            stat_cbs.append(cb)
 
-        # Add Well column mapping substrate to letter and composition to number
-        aggregated["Well"] = aggregated.apply(lambda row: f"{chr(ord('A') + int(row['substrate']) - 1)}{int(row['composition_index'])}", axis=1)
+        def _toggle_stats():
+            state = "disabled" if mode_var.get() == 0 else "normal"
+            for cb in stat_cbs:
+                cb.configure(state=state)
 
-        # Add count of aggregated measurements for reference
-        counts = df_to_export.groupby(grouping_cols).size().reset_index(name='n_measurements')
-        aggregated = aggregated.merge(counts, on=grouping_cols, how='left')
+        # --- Buttons ---
+        btn_frame = ttk.Frame(top)
+        btn_frame.grid(row=6, column=0, columnspan=3, pady=(12, 8))
 
-        # Create column order with mean and max columns
-        mean_cols = [f"{col}_mean" for col in numerical_cols]
-        max_cols = [f"{col}_max" for col in numerical_cols]
-        column_order = ["substrate", "composition_index", "group_index", "Well", "n_measurements"] + mean_cols + max_cols
-        aggregated = aggregated[column_order]
+        def _do_export():
+            mode = mode_var.get()
+            df_to_export = self._filtered_df()
 
-        aggregated.to_csv(path, index=False)
-        messagebox.showinfo("Export", f"Aggregated data saved: {path}\n{len(aggregated)} composition groups exported")
+            if mode == 0:
+                # Raw export
+                drop_cols = [c for c in ("sweep_uid", "include") if c in df_to_export.columns]
+                export_df = df_to_export.drop(columns=drop_cols)
+                if "group_index" not in export_df.columns:
+                    export_df["group_index"] = export_df["composition_index"].apply(comp_to_group)
+                if "Well" not in export_df.columns:
+                    export_df["Well"] = export_df.apply(
+                        lambda r: f"{chr(ord('A') + int(r['substrate']) - 1)}{int(r['composition_index'])}", axis=1)
+                desc = f"Raw data exported: {len(export_df)} rows"
+            else:
+                # Aggregated export
+                selected_stats = [k for k, v in stat_vars.items() if v.get()]
+                if not selected_stats:
+                    messagebox.showwarning("Export", "Select at least one statistic.", parent=top)
+                    return
+
+                if mode == 1:
+                    grouping_cols = ["substrate", "composition_index"]
+                else:
+                    if "group_index" not in df_to_export.columns:
+                        df_to_export["group_index"] = df_to_export["composition_index"].apply(comp_to_group)
+                    grouping_cols = ["substrate", "group_index"]
+
+                agg_dict = {col: selected_stats for col in numerical_cols}
+                grouped = df_to_export.groupby(grouping_cols)[numerical_cols].agg(agg_dict)
+                # Flatten multi-level columns: ("Voc", "mean") -> "Voc_mean"
+                grouped.columns = [f"{col}_{stat}" for col, stat in grouped.columns]
+                export_df = grouped.reset_index()
+
+                # Add group_index if grouping by composition
+                if mode == 1 and "group_index" not in export_df.columns:
+                    export_df["group_index"] = export_df["composition_index"].apply(comp_to_group)
+
+                # Add Well column
+                if mode == 1:
+                    export_df["Well"] = export_df.apply(
+                        lambda r: f"{chr(ord('A') + int(r['substrate']) - 1)}{int(r['composition_index'])}", axis=1)
+                else:
+                    export_df["Well"] = export_df.apply(
+                        lambda r: f"{chr(ord('A') + int(r['substrate']) - 1)}g{int(r['group_index'])}", axis=1)
+
+                # Add measurement count
+                counts = df_to_export.groupby(grouping_cols).size().reset_index(name="n_measurements")
+                export_df = export_df.merge(counts, on=grouping_cols, how="left")
+
+                # Reorder: grouping cols + Well + n_measurements first, then stat columns
+                meta_cols = [c for c in [*grouping_cols, "group_index", "Well", "n_measurements"] if c in export_df.columns]
+                stat_cols = [c for c in export_df.columns if c not in meta_cols]
+                export_df = export_df[meta_cols + stat_cols]
+
+                grp_label = "composition" if mode == 1 else "group"
+                desc = f"Aggregated data: {len(export_df)} {grp_label} groups"
+
+            top.destroy()
+
+            path = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV", "*.csv")])
+            if not path:
+                return
+            export_df.to_csv(path, index=False)
+            messagebox.showinfo("Export", f"{desc}\nSaved to {path}")
+
+        ttk.Button(btn_frame, text="Export", command=_do_export).pack(side="left", padx=4)
+        ttk.Button(btn_frame, text="Cancel", command=top.destroy).pack(side="left", padx=4)
 
     # -------------------- Metrics recompute --------------------
 
