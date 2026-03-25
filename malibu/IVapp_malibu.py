@@ -43,16 +43,31 @@ class IVDataAnalyzer:
         
         # Available color palettes
         self.color_palettes = {
-            "Default": None,
+            "muted": "muted",
+            "deep": "deep",
+            "colorblind": "colorblind",
+            "pastel": "pastel",
+            "bright": "bright",
+            "dark": "dark",
+            "tab10": "tab10",
+            "tab20": "tab20",
+            "Set1": "Set1",
+            "Set2": "Set2",
+            "Set3": "Set3",
+            "Paired": "Paired",
             "viridis": "viridis",
             "magma": "magma",
             "plasma": "plasma",
             "inferno": "inferno",
-            "Set1": "Set1",
-            "Set2": "Set2",
-            "Set3": "Set3",
-            "tab10": "tab10",
-            "pastel": "pastel"
+            "rocket": "rocket",
+            "mako": "mako",
+            "flare": "flare",
+            "crest": "crest",
+            "Spectral": "Spectral",
+            "RdYlGn": "RdYlGn",
+            "coolwarm": "coolwarm",
+            "husl": "husl",
+            "Default (blue)": None,
         }
         
         # Auto-save custom order to temp file
@@ -75,11 +90,16 @@ class IVDataAnalyzer:
         # New IV Plot tab
         iv_plot_frame = ttk.Frame(notebook)
         notebook.add(iv_plot_frame, text="IV Plots")
-    
+
+        # Best PCE tab
+        best_pce_frame = ttk.Frame(notebook)
+        notebook.add(best_pce_frame, text="Best PCE")
+
         # Setup UI components
         self.setup_data_management(data_frame)
         self.setup_plotting(plot_frame)
-        self.setup_iv_plot(iv_plot_frame)  # Add this line
+        self.setup_iv_plot(iv_plot_frame)
+        self.setup_best_pce_tab(best_pce_frame)
 
     
     def setup_data_management(self, parent):
@@ -170,10 +190,11 @@ class IVDataAnalyzer:
             show='headings'
         )
         self.conditions_tree.heading('Substrate ID', text='Substrate ID')
-        self.conditions_tree.heading('Condition', text='Condition')
+        self.conditions_tree.heading('Condition', text='Condition (double-click to rename)')
         self.conditions_tree.heading('Display Order', text='Display Order')
         self.conditions_tree.column('Substrate ID', width=100, anchor='center')
-        self.conditions_tree.column('Condition', width=150, anchor='center')
+        self.conditions_tree.column('Condition', width=200, anchor='center')
+        self.conditions_tree.bind('<Double-1>', self.on_condition_tree_double_click)
         self.conditions_tree.column('Display Order', width=80, anchor='center')
         
         # Add summary frame for unique conditions
@@ -202,12 +223,16 @@ class IVDataAnalyzer:
         move_down_button.pack(side="left", padx=5)
     
     def setup_plotting(self, parent):
-        # Plot controls frame
-        plot_control_frame = ttk.LabelFrame(parent, text="Plot Controls")
-        plot_control_frame.pack(fill="x", expand=False, padx=10, pady=5)
-
         # Parameters for plotting
         self.plot_parameters = ['Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]', 'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]']
+
+        # Horizontal container: left = plot controls, right = condition panels
+        controls_container = ttk.Frame(parent)
+        controls_container.pack(fill="x", expand=False, padx=10, pady=5)
+
+        # ── LEFT: Plot controls ──────────────────────────────────────────────
+        plot_control_frame = ttk.LabelFrame(controls_container, text="Plot Controls")
+        plot_control_frame.pack(side="left", fill="both", expand=True, padx=(0, 5))
 
         # Multi-plot management
         multiplot_frame = ttk.Frame(plot_control_frame)
@@ -230,7 +255,7 @@ class IVDataAnalyzer:
 
         # Add first plot by default
         self.add_plot_slot()
-        
+
         # Color palette selection
         color_frame = ttk.Frame(plot_control_frame)
         color_frame.pack(fill="x", expand=False, padx=5, pady=5)
@@ -244,7 +269,7 @@ class IVDataAnalyzer:
             state="readonly"
         )
         self.color_palette_combobox.pack(side="left", padx=5)
-        self.color_palette_combobox.current(0)  # Select default palette
+        self.color_palette_combobox.current(0)  # Select muted palette as default
         self.color_palette_combobox.bind("<<ComboboxSelected>>", self.on_color_mode_change)
 
         # Manual color selection button
@@ -253,13 +278,33 @@ class IVDataAnalyzer:
 
         # Store manual color selections
         self.manual_colors = {}  # {condition_name: color_hex}
-        
+
+        # Tick label size controls
+        tick_frame = ttk.Frame(plot_control_frame)
+        tick_frame.pack(fill="x", expand=False, padx=5, pady=5)
+
+        ttk.Label(tick_frame, text="X-tick size:").pack(side="left", padx=5)
+        self.xtick_size_var = tk.StringVar(value="16")
+        ttk.Spinbox(tick_frame, from_=6, to=40, increment=1, textvariable=self.xtick_size_var, width=5).pack(side="left", padx=(0, 15))
+
+        ttk.Label(tick_frame, text="Y-tick size:").pack(side="left", padx=5)
+        self.ytick_size_var = tk.StringVar(value="10")
+        ttk.Spinbox(tick_frame, from_=6, to=40, increment=1, textvariable=self.ytick_size_var, width=5).pack(side="left", padx=(0, 15))
+
+        ttk.Label(tick_frame, text="Y-label size:").pack(side="left", padx=5)
+        self.ylabel_size_var = tk.StringVar(value="20")
+        ttk.Spinbox(tick_frame, from_=6, to=40, increment=1, textvariable=self.ylabel_size_var, width=5).pack(side="left", padx=(0, 15))
+
+        ttk.Label(tick_frame, text="X-tick angle:").pack(side="left", padx=5)
+        self.xtick_angle_var = tk.StringVar(value="45")
+        ttk.Spinbox(tick_frame, from_=0, to=90, increment=15, textvariable=self.xtick_angle_var, width=5).pack(side="left", padx=0)
+
         # X-axis ordering selection
         xorder_frame = ttk.Frame(plot_control_frame)
         xorder_frame.pack(fill="x", expand=False, padx=5, pady=5)
-        
+
         ttk.Label(xorder_frame, text="X-axis Order:").pack(side="left", padx=5)
-        
+
         self.xorder_combobox = ttk.Combobox(
             xorder_frame,
             values=["Display Order (Default)", "Alphabetical", "Custom"],
@@ -267,74 +312,88 @@ class IVDataAnalyzer:
             state="readonly"
         )
         self.xorder_combobox.pack(side="left", padx=5)
-        self.xorder_combobox.current(0)  # Select default ordering
+        self.xorder_combobox.current(0)
         self.xorder_combobox.bind("<<ComboboxSelected>>", self.on_xorder_change)
-        
-        # Custom order interface (initially hidden)
-        self.custom_order_frame = ttk.Frame(plot_control_frame)
-        
-        # Create a labeled frame for the custom ordering
-        custom_order_labelframe = ttk.LabelFrame(self.custom_order_frame, text="Custom Condition Order")
-        custom_order_labelframe.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        # Create frame for listbox and buttons
-        listbox_frame = ttk.Frame(custom_order_labelframe)
-        listbox_frame.pack(fill="both", expand=True, padx=5, pady=5)
-        
-        # Instructions label
-        instructions_label = ttk.Label(listbox_frame, text="Reorder conditions: Use buttons, Ctrl+Up/Down, or double-click to move to top:")
-        instructions_label.pack(anchor="w", pady=(0, 5))
-        
-        # Frame for listbox and scrollbar
-        list_scroll_frame = ttk.Frame(listbox_frame)
-        list_scroll_frame.pack(fill="both", expand=True)
-        
-        # Listbox for conditions
-        self.conditions_listbox = tk.Listbox(list_scroll_frame, height=6, selectmode=tk.SINGLE)
-        self.conditions_listbox.pack(side="left", fill="both", expand=True)
-        
-        # Add keyboard shortcuts for easier reordering
-        self.conditions_listbox.bind('<Control-Up>', lambda e: self.move_condition_up())
-        self.conditions_listbox.bind('<Control-Down>', lambda e: self.move_condition_down())
-        self.conditions_listbox.bind('<Double-Button-1>', self.on_condition_double_click)
-        
-        # Scrollbar for listbox
-        listbox_scrollbar = ttk.Scrollbar(list_scroll_frame, orient="vertical", command=self.conditions_listbox.yview)
-        listbox_scrollbar.pack(side="right", fill="y")
-        self.conditions_listbox.configure(yscrollcommand=listbox_scrollbar.set)
-        
-        # Buttons frame
-        buttons_frame = ttk.Frame(listbox_frame)
-        buttons_frame.pack(fill="x", pady=(5, 0))
-        
-        # Move up button
-        self.move_up_btn = ttk.Button(buttons_frame, text="↑ Move Up", command=self.move_condition_up)
-        self.move_up_btn.pack(side="left", padx=(0, 5))
-        
-        # Move down button
-        self.move_down_btn = ttk.Button(buttons_frame, text="↓ Move Down", command=self.move_condition_down)
-        self.move_down_btn.pack(side="left", padx=5)
-        
-        # Reset button
-        self.reset_order_btn = ttk.Button(buttons_frame, text="Reset to Default", command=self.reset_condition_order)
-        self.reset_order_btn.pack(side="left", padx=5)
-        
+
+        # Best measurement filter
+        best_meas_frame = ttk.Frame(plot_control_frame)
+        best_meas_frame.pack(fill="x", expand=False, padx=5, pady=5)
+
+        self.best_measurement_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(best_meas_frame, text="Best measurement only (highest avg. efficiency fwd/rev pair per cell)",
+                        variable=self.best_measurement_var).pack(side="left", padx=5)
+
         # Plot buttons
         button_frame = ttk.Frame(plot_control_frame)
         button_frame.pack(fill="x", expand=False, padx=5, pady=5)
-        
-        plot_button = ttk.Button(button_frame, text="Generate Plot", command=self.generate_plot)
-        plot_button.pack(side="left", padx=5)
-        
-        save_plot_button = ttk.Button(button_frame, text="Save Plot", command=self.save_plot)
-        save_plot_button.pack(side="left", padx=5)
 
-        export_data_button = ttk.Button(button_frame, text="Export Data to Excel", command=self.export_condition_data)
-        export_data_button.pack(side="left", padx=5)
-        
+        ttk.Button(button_frame, text="Generate Plot", command=self.generate_plot).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Save Plot", command=self.save_plot).pack(side="left", padx=5)
+        ttk.Button(button_frame, text="Export Data to Excel", command=self.export_condition_data).pack(side="left", padx=5)
+
+        # ── RIGHT: Condition panels ──────────────────────────────────────────
+        right_panel = ttk.Frame(controls_container)
+        right_panel.pack(side="left", fill="both", padx=(5, 0))
+
+        # Conditions to Plot filter
+        cond_filter_frame = ttk.LabelFrame(right_panel, text="Conditions to Plot")
+        cond_filter_frame.pack(fill="both", expand=True, pady=(0, 5))
+
+        cond_filter_inner = ttk.Frame(cond_filter_frame)
+        cond_filter_inner.pack(fill="both", expand=True, padx=5, pady=5)
+
+        cond_list_scroll = ttk.Frame(cond_filter_inner)
+        cond_list_scroll.pack(side="left", fill="both", expand=True)
+
+        self.plot_cond_listbox = tk.Listbox(cond_list_scroll, selectmode=tk.MULTIPLE, height=6, exportselection=False, width=22)
+        cond_vsb = ttk.Scrollbar(cond_list_scroll, orient="vertical", command=self.plot_cond_listbox.yview)
+        self.plot_cond_listbox.configure(yscrollcommand=cond_vsb.set)
+        self.plot_cond_listbox.pack(side="left", fill="both", expand=True)
+        cond_vsb.pack(side="right", fill="y")
+
+        cond_btn_frame = ttk.Frame(cond_filter_inner)
+        cond_btn_frame.pack(side="left", padx=(5, 0), fill="y")
+        ttk.Button(cond_btn_frame, text="All", command=self._select_all_plot_conds).pack(fill="x", pady=2)
+        ttk.Button(cond_btn_frame, text="None", command=self._deselect_all_plot_conds).pack(fill="x", pady=2)
+
+        # Custom order interface (initially hidden, shown in right_panel when "Custom" selected)
+        self.custom_order_frame = ttk.Frame(right_panel)
+
+        custom_order_labelframe = ttk.LabelFrame(self.custom_order_frame, text="Custom Condition Order")
+        custom_order_labelframe.pack(fill="both", expand=True, padx=0, pady=0)
+
+        listbox_frame = ttk.Frame(custom_order_labelframe)
+        listbox_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+        ttk.Label(listbox_frame, text="Ctrl+Up/Down or double-click to move to top:").pack(anchor="w", pady=(0, 3))
+
+        list_scroll_frame = ttk.Frame(listbox_frame)
+        list_scroll_frame.pack(fill="both", expand=True)
+
+        self.conditions_listbox = tk.Listbox(list_scroll_frame, height=5, selectmode=tk.SINGLE, width=22)
+        self.conditions_listbox.pack(side="left", fill="both", expand=True)
+
+        self.conditions_listbox.bind('<Control-Up>', lambda e: self.move_condition_up())
+        self.conditions_listbox.bind('<Control-Down>', lambda e: self.move_condition_down())
+        self.conditions_listbox.bind('<Double-Button-1>', self.on_condition_double_click)
+
+        listbox_scrollbar = ttk.Scrollbar(list_scroll_frame, orient="vertical", command=self.conditions_listbox.yview)
+        listbox_scrollbar.pack(side="right", fill="y")
+        self.conditions_listbox.configure(yscrollcommand=listbox_scrollbar.set)
+
+        buttons_frame = ttk.Frame(listbox_frame)
+        buttons_frame.pack(fill="x", pady=(3, 0))
+
+        self.move_up_btn = ttk.Button(buttons_frame, text="↑", command=self.move_condition_up, width=3)
+        self.move_up_btn.pack(side="left", padx=(0, 2))
+        self.move_down_btn = ttk.Button(buttons_frame, text="↓", command=self.move_condition_down, width=3)
+        self.move_down_btn.pack(side="left", padx=2)
+        self.reset_order_btn = ttk.Button(buttons_frame, text="Reset", command=self.reset_condition_order)
+        self.reset_order_btn.pack(side="left", padx=2)
+
         # Frame for the condition plot
         self.condition_plot_frame = ttk.Frame(parent)
-        self.condition_plot_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        self.condition_plot_frame.pack(fill="both", expand=True, padx=10, pady=5)
 
     def add_plot_slot(self):
         """Add a new plot slot (max 4)"""
@@ -683,8 +742,9 @@ class IVDataAnalyzer:
         for _, row in sorted_conditions.iterrows():
             self.conditions_tree.insert('', 'end', values=(row['Substrate ID'], row['Condition'], row['Display Order']))
         
-        # Update summary
+        # Update summary and condition filter listbox
         self.update_condition_summary()
+        self.update_plot_conditions_listbox()
     
     def update_condition_summary(self):
         """Update the condition summary display"""
@@ -787,11 +847,9 @@ class IVDataAnalyzer:
         """Handle x-axis ordering combobox selection change"""
         selected_order = self.xorder_combobox.get()
         if selected_order == "Custom":
-            # Show custom order interface and populate it
             self.populate_conditions_listbox()
-            self.custom_order_frame.pack(fill="both", expand=True, pady=(10, 0))
+            self.custom_order_frame.pack(fill="both", expand=True)
         else:
-            # Hide custom order interface
             self.custom_order_frame.pack_forget()
     
     def populate_conditions_listbox(self, custom_order=None):
@@ -1002,6 +1060,112 @@ class IVDataAnalyzer:
         ttk.Button(button_frame, text="Apply", command=apply_and_close).pack(side="right", padx=5)
         ttk.Button(button_frame, text="Cancel", command=color_window.destroy).pack(side="right", padx=5)
 
+    def on_condition_tree_double_click(self, event):
+        """Handle double-click on conditions tree — allow renaming the Condition column."""
+        region = self.conditions_tree.identify_region(event.x, event.y)
+        if region != 'cell':
+            return
+        col = self.conditions_tree.identify_column(event.x)
+        if col != '#2':  # Only the Condition column
+            return
+        item = self.conditions_tree.identify_row(event.y)
+        if not item:
+            return
+        old_name = self.conditions_tree.item(item, 'values')[1]
+        self._open_rename_dialog(old_name)
+
+    def _open_rename_dialog(self, old_name):
+        """Open a small dialog to rename a condition."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Rename Condition")
+        dialog.geometry("320x110")
+        dialog.resizable(False, False)
+        dialog.grab_set()
+
+        ttk.Label(dialog, text=f"Rename  \"{old_name}\"  to:").pack(padx=15, pady=(15, 5))
+        name_var = tk.StringVar(value=old_name)
+        entry = ttk.Entry(dialog, textvariable=name_var, width=30)
+        entry.pack(padx=15)
+        entry.select_range(0, tk.END)
+        entry.focus_set()
+
+        def apply():
+            new_name = name_var.get().strip()
+            if not new_name:
+                return
+            if new_name == old_name:
+                dialog.destroy()
+                return
+            existing = self.get_conditions()
+            if new_name in existing:
+                messagebox.showwarning("Duplicate", f"Condition '{new_name}' already exists.", parent=dialog)
+                return
+            self._rename_condition(old_name, new_name)
+            dialog.destroy()
+
+        btn_frame = ttk.Frame(dialog)
+        btn_frame.pack(pady=8)
+        ttk.Button(btn_frame, text="OK", command=apply, width=8).pack(side="left", padx=5)
+        ttk.Button(btn_frame, text="Cancel", command=dialog.destroy, width=8).pack(side="left", padx=5)
+        entry.bind('<Return>', lambda e: apply())
+        entry.bind('<Escape>', lambda e: dialog.destroy())
+
+    def _rename_condition(self, old_name, new_name):
+        """Apply a condition rename everywhere it appears."""
+        # DataFrame
+        self.conditions_data['Condition'] = self.conditions_data['Condition'].replace(old_name, new_name)
+
+        # Combobox values
+        vals = list(self.condition_combobox['values'])
+        vals = [new_name if v == old_name else v for v in vals]
+        self.condition_combobox['values'] = vals
+        if self.condition_combobox.get() == old_name:
+            self.condition_combobox.set(new_name)
+
+        # Custom order listbox
+        if hasattr(self, 'conditions_listbox'):
+            items = list(self.conditions_listbox.get(0, tk.END))
+            self.conditions_listbox.delete(0, tk.END)
+            for it in items:
+                self.conditions_listbox.insert(tk.END, new_name if it == old_name else it)
+
+        # Conditions to plot listbox
+        if hasattr(self, 'plot_cond_listbox'):
+            items = list(self.plot_cond_listbox.get(0, tk.END))
+            sel = set(self.plot_cond_listbox.curselection())
+            self.plot_cond_listbox.delete(0, tk.END)
+            for i, it in enumerate(items):
+                self.plot_cond_listbox.insert(tk.END, new_name if it == old_name else it)
+                if i in sel:
+                    self.plot_cond_listbox.selection_set(i)
+
+        # Refresh the tree
+        self.update_conditions_tree()
+
+    def update_plot_conditions_listbox(self):
+        """Refresh the 'Conditions to Plot' listbox; preserve existing selection if possible."""
+        if not hasattr(self, 'plot_cond_listbox'):
+            return
+        # Remember currently selected conditions
+        selected_before = {self.plot_cond_listbox.get(i) for i in self.plot_cond_listbox.curselection()}
+        self.plot_cond_listbox.delete(0, tk.END)
+        if self.conditions_data.empty:
+            return
+        unique_conds = self.conditions_data.sort_values('Display Order')['Condition'].unique()
+        for cond in unique_conds:
+            self.plot_cond_listbox.insert(tk.END, cond)
+        # Re-select all by default (or restore previous selection)
+        for i in range(self.plot_cond_listbox.size()):
+            cond = self.plot_cond_listbox.get(i)
+            if not selected_before or cond in selected_before:
+                self.plot_cond_listbox.selection_set(i)
+
+    def _select_all_plot_conds(self):
+        self.plot_cond_listbox.selection_set(0, tk.END)
+
+    def _deselect_all_plot_conds(self):
+        self.plot_cond_listbox.selection_clear(0, tk.END)
+
     def get_condition_order(self, plot_data):
         """Determine the order of conditions for plotting based on user selection"""
         selected_order = self.xorder_combobox.get()
@@ -1028,6 +1192,46 @@ class IVDataAnalyzer:
             # Fallback to alphabetical if no conditions data
             return sorted(unique_conditions)
     
+    def _filter_best_measurement(self, df):
+        """Keep only the best fwd/rev pair per cell (Substrate ID + Pixel).
+
+        For each cell, fwd and rev rows are sorted by filename and paired
+        positionally (1st fwd with 1st rev, etc.).  The pair whose average
+        Efficiency is highest is retained; all other rows for that cell are
+        dropped.  Cells with only one scan direction are kept as-is.
+        """
+        kept = []
+        for (subid, pixel), group in df.groupby(['Substrate ID', 'Pixel']):
+            fwd = group[group['Scan Direction'].str.lower().isin(['fwd', 'fw', 'forward'])].sort_values('Filename')
+            rev = group[group['Scan Direction'].str.lower().isin(['rev', 'rv', 'reverse'])].sort_values('Filename')
+
+            if fwd.empty or rev.empty:
+                # No pairing possible – keep all rows for this cell
+                kept.append(group)
+                continue
+
+            n_pairs = min(len(fwd), len(rev))
+            best_avg = -float('inf')
+            best_pair = None
+            for i in range(n_pairs):
+                fw_eff = pd.to_numeric(fwd.iloc[i].get('Efficiency [.]'), errors='coerce')
+                rv_eff = pd.to_numeric(rev.iloc[i].get('Efficiency [.]'), errors='coerce')
+                if pd.isna(fw_eff):
+                    fw_eff = 0.0
+                if pd.isna(rv_eff):
+                    rv_eff = 0.0
+                avg = (fw_eff + rv_eff) / 2.0
+                if avg > best_avg:
+                    best_avg = avg
+                    best_pair = (fwd.index[i], rev.index[i])
+
+            if best_pair is not None:
+                kept.append(df.loc[[best_pair[0], best_pair[1]]])
+
+        if not kept:
+            return pd.DataFrame(columns=df.columns)
+        return pd.concat(kept, ignore_index=True)
+
     def generate_plot(self):
         if self.measurements_data.empty or self.conditions_data.empty:
             messagebox.showwarning("Warning", "No data available for plotting.")
@@ -1076,6 +1280,23 @@ class IVDataAnalyzer:
             messagebox.showwarning("Warning", "No data available after joining measurements with conditions.")
             return
 
+        # Filter to only conditions selected in the condition filter listbox
+        if hasattr(self, 'plot_cond_listbox') and self.plot_cond_listbox.size() > 0:
+            selected_indices = self.plot_cond_listbox.curselection()
+            if selected_indices:
+                selected_conds = {self.plot_cond_listbox.get(i) for i in selected_indices}
+                plot_data = plot_data[plot_data['Condition'].isin(selected_conds)]
+            if plot_data.empty:
+                messagebox.showwarning("Warning", "No data for the selected conditions.")
+                return
+
+        # Filter to best measurement per cell if checkbox is ticked
+        if self.best_measurement_var.get():
+            plot_data = self._filter_best_measurement(plot_data)
+            if plot_data.empty:
+                messagebox.showwarning("Warning", "No complete fwd/rev pairs found.")
+                return
+
         # Clear previous plot
         for widget in self.condition_plot_frame.winfo_children():
             widget.destroy()
@@ -1123,8 +1344,12 @@ class IVDataAnalyzer:
             slot = self.plot_slots[i]
 
             # Create box plot with the selected palette and custom order
-            sns.boxplot(data=plot_data, x='Condition', y=param, ax=ax, palette=palette, order=condition_order)
-            sns.stripplot(data=plot_data, x='Condition', y=param, color='black', size=4, alpha=0.6, ax=ax, order=condition_order)
+            sns.boxplot(data=plot_data, x='Condition', y=param, ax=ax,
+                        hue='Condition', palette=palette, order=condition_order, legend=False, showfliers=False)
+            sns.stripplot(data=plot_data, x='Condition', y=param,
+                          hue='Scan Direction', palette={'fwd': 'black', 'rev': 'red'},
+                          size=4, alpha=0.6, ax=ax, order=condition_order, dodge=False,
+                          legend=(i == 0))
 
             # Set y-axis limits if provided for this specific plot
             try:
@@ -1140,17 +1365,35 @@ class IVDataAnalyzer:
             except ValueError:
                 pass  # Use auto limits if invalid
 
-            ax.set_ylabel(param, fontsize=20)
+            try:
+                ylabel_size = int(self.ylabel_size_var.get())
+            except (ValueError, AttributeError):
+                ylabel_size = 20
+            try:
+                ytick_size = int(self.ytick_size_var.get())
+            except (ValueError, AttributeError):
+                ytick_size = 10
+            try:
+                xtick_size = int(self.xtick_size_var.get())
+            except (ValueError, AttributeError):
+                xtick_size = 16
+            try:
+                xtick_angle = int(self.xtick_angle_var.get())
+            except (ValueError, AttributeError):
+                xtick_angle = 45
+
+            ax.set_ylabel(param, fontsize=ylabel_size)
             ax.set_xlabel('')  # Remove x-axis label completely
 
             # Add horizontal grid lines only
             ax.grid(True, axis='y', alpha=0.4, linestyle='--')
 
             # Set tick parameters with larger labels
-            ax.tick_params(axis='y', labelsize=10)  # Y-axis tick numbers
+            ax.tick_params(axis='y', labelsize=ytick_size)
 
-            # For x-axis (condition names), set 45-degree angle rotation
-            plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right', fontsize=16)
+            # X-axis tick labels with user-defined angle
+            ha = 'right' if xtick_angle > 0 else 'center'
+            plt.setp(ax.xaxis.get_majorticklabels(), rotation=xtick_angle, ha=ha, fontsize=xtick_size)
 
         # Hide unused subplots
         for i in range(n_plots, nrows * ncols):
@@ -1961,6 +2204,274 @@ class IVDataAnalyzer:
             messagebox.showinfo("Saved", f"Plot saved to:\n{fpath}")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to save plot: {e}")
+
+    def setup_best_pce_tab(self, parent):
+        """Setup the Best PCE tab with a table and interactive JV plot."""
+        # Main horizontal split: left = table, right = plot
+        main_container = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
+        main_container.pack(fill="both", expand=True, padx=10, pady=5)
+
+        # Left side: controls + table
+        left_frame = ttk.Frame(main_container)
+        main_container.add(left_frame, weight=1)
+
+        # Refresh button
+        control_frame = ttk.Frame(left_frame)
+        control_frame.pack(fill="x", pady=(0, 5))
+
+        ttk.Button(control_frame, text="Refresh Best PCE", command=self.compute_best_pce).pack(side="left", padx=5, pady=5)
+        ttk.Button(control_frame, text="Export to Excel", command=self.export_best_pce).pack(side="left", padx=5, pady=5)
+
+        # Table
+        table_frame = ttk.LabelFrame(left_frame, text="Best PCE per Cell (click row to plot JV)")
+        table_frame.pack(fill="both", expand=True)
+
+        best_pce_columns = ('Condition', 'Substrate ID', 'Pixel', 'Avg PCE [%]', 'Fwd PCE [%]', 'Rev PCE [%]',
+                            'Avg Voc [V]', 'Avg Jsc [mA/cm2]', 'Avg FF [%]')
+        self.best_pce_tree = ttk.Treeview(table_frame, columns=best_pce_columns, show='headings')
+
+        for col in best_pce_columns:
+            self.best_pce_tree.heading(col, text=col)
+            width = 140 if col == 'Condition' else (120 if col == 'Substrate ID' else 100)
+            self.best_pce_tree.column(col, width=width, anchor='center')
+
+        vsb = ttk.Scrollbar(table_frame, orient="vertical", command=self.best_pce_tree.yview)
+        hsb = ttk.Scrollbar(table_frame, orient="horizontal", command=self.best_pce_tree.xview)
+        self.best_pce_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.pack(side="right", fill="y")
+        hsb.pack(side="bottom", fill="x")
+        self.best_pce_tree.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Bind row selection to plot
+        self.best_pce_tree.bind('<<TreeviewSelect>>', self.on_best_pce_row_click)
+
+        # Store the best-pce pair data for plotting
+        self.best_pce_pairs = {}  # {substrate_id: {'fwd_filepath': ..., 'rev_filepath': ...}}
+
+        # Right side: JV plot
+        right_frame = ttk.Frame(main_container)
+        main_container.add(right_frame, weight=1)
+
+        plot_label_frame = ttk.LabelFrame(right_frame, text="JV Curve")
+        plot_label_frame.pack(fill="both", expand=True)
+
+        self.best_pce_plot_frame = ttk.Frame(plot_label_frame)
+        self.best_pce_plot_frame.pack(fill="both", expand=True, padx=5, pady=5)
+
+    def compute_best_pce(self):
+        """Compute best averaged PCE (fwd+rev) per condition (or per Substrate ID if no condition assigned).
+
+        When multiple Substrate IDs share the same condition, they are pooled
+        together and the single best fwd/rev pair across all of them is kept.
+        """
+        if self.measurements_data.empty:
+            messagebox.showwarning("Warning", "No measurement data loaded.")
+            return
+
+        df = self.measurements_data.copy()
+        df['Efficiency [.]'] = pd.to_numeric(df['Efficiency [.]'], errors='coerce')
+        df['Voc [V]'] = pd.to_numeric(df['Voc [V]'], errors='coerce')
+        df['Jsc [mA/cm2]'] = pd.to_numeric(df['Jsc [mA/cm2]'], errors='coerce')
+        df['FF [.]'] = pd.to_numeric(df['FF [.]'], errors='coerce')
+
+        # Normalize scan direction
+        df['__dir__'] = df['Scan Direction'].astype(str).str.lower().str.strip()
+        df['__dir__'] = df['__dir__'].replace({'fw': 'fwd', 'forward': 'fwd', 'reverse': 'rev', 'rv': 'rev'})
+
+        # Merge with conditions — use Condition as grouping key when available
+        if not self.conditions_data.empty:
+            df = df.merge(self.conditions_data[['Substrate ID', 'Condition']], on='Substrate ID', how='left')
+        else:
+            df['Condition'] = None
+
+        # For substrates without a condition, use Substrate ID as its own group
+        df['__group__'] = df['Condition'].fillna(df['Substrate ID'])
+
+        results = []
+        self.best_pce_pairs = {}
+
+        for group_key, group_df in df.groupby('__group__'):
+            best_avg_pce = -float('inf')
+            best_row = None
+
+            for (subid, pixel), pix_group in group_df.groupby(['Substrate ID', 'Pixel']):
+                fwd_rows = pix_group[pix_group['__dir__'] == 'fwd'].sort_values('Filename')
+                rev_rows = pix_group[pix_group['__dir__'] == 'rev'].sort_values('Filename')
+
+                if fwd_rows.empty or rev_rows.empty:
+                    continue
+
+                n_pairs = min(len(fwd_rows), len(rev_rows))
+                for i in range(n_pairs):
+                    fw = fwd_rows.iloc[i]
+                    rv = rev_rows.iloc[i]
+                    fw_eff = fw['Efficiency [.]'] if not pd.isna(fw['Efficiency [.]']) else 0.0
+                    rv_eff = rv['Efficiency [.]'] if not pd.isna(rv['Efficiency [.]']) else 0.0
+                    avg_pce = (fw_eff + rv_eff) / 2.0
+
+                    if avg_pce > best_avg_pce:
+                        best_avg_pce = avg_pce
+                        fw_voc = fw['Voc [V]'] if not pd.isna(fw['Voc [V]']) else 0.0
+                        rv_voc = rv['Voc [V]'] if not pd.isna(rv['Voc [V]']) else 0.0
+                        fw_jsc = fw['Jsc [mA/cm2]'] if not pd.isna(fw['Jsc [mA/cm2]']) else 0.0
+                        rv_jsc = rv['Jsc [mA/cm2]'] if not pd.isna(rv['Jsc [mA/cm2]']) else 0.0
+                        fw_ff = fw['FF [.]'] if not pd.isna(fw['FF [.]']) else 0.0
+                        rv_ff = rv['FF [.]'] if not pd.isna(rv['FF [.]']) else 0.0
+                        condition_label = fw.get('Condition', '') or ''
+                        best_row = {
+                            'Condition': condition_label if condition_label else '—',
+                            'Substrate ID': subid,
+                            'Pixel': pixel,
+                            'Avg PCE [%]': round(avg_pce, 3),
+                            'Fwd PCE [%]': round(fw_eff, 3),
+                            'Rev PCE [%]': round(rv_eff, 3),
+                            'Avg Voc [V]': round((fw_voc + rv_voc) / 2.0, 4),
+                            'Avg Jsc [mA/cm2]': round((fw_jsc + rv_jsc) / 2.0, 3),
+                            'Avg FF [%]': round((fw_ff + rv_ff) / 2.0, 2),
+                            'fwd_filepath': fw.get('Filepath', ''),
+                            'rev_filepath': rv.get('Filepath', ''),
+                            '__group__': group_key,
+                            # Individual fwd/rev params for plot annotation
+                            'Fwd Voc [V]': round(fw_voc, 4),
+                            'Rev Voc [V]': round(rv_voc, 4),
+                            'Fwd Jsc [mA/cm2]': round(fw_jsc, 3),
+                            'Rev Jsc [mA/cm2]': round(rv_jsc, 3),
+                            'Fwd FF [%]': round(fw_ff, 2),
+                            'Rev FF [%]': round(rv_ff, 2),
+                        }
+
+            if best_row is not None:
+                results.append(best_row)
+                self.best_pce_pairs[group_key] = {
+                    'fwd_filepath': best_row['fwd_filepath'],
+                    'rev_filepath': best_row['rev_filepath'],
+                    'params': best_row,
+                }
+
+        # Sort by Avg PCE descending
+        results.sort(key=lambda x: x['Avg PCE [%]'], reverse=True)
+
+        # Populate tree
+        for item in self.best_pce_tree.get_children():
+            self.best_pce_tree.delete(item)
+
+        display_cols = ('Condition', 'Substrate ID', 'Pixel', 'Avg PCE [%]', 'Fwd PCE [%]', 'Rev PCE [%]',
+                        'Avg Voc [V]', 'Avg Jsc [mA/cm2]', 'Avg FF [%]')
+        for row in results:
+            values = [row[col] for col in display_cols]
+            self.best_pce_tree.insert('', 'end', values=values)
+
+        # Store for export
+        self._best_pce_results = results
+
+        if not results:
+            messagebox.showinfo("Info", "No complete fwd/rev pairs found for any cell.")
+
+    def on_best_pce_row_click(self, event=None):
+        """Plot JV curves for the selected row in the Best PCE table."""
+        selected = self.best_pce_tree.selection()
+        if not selected:
+            return
+
+        item_values = self.best_pce_tree.item(selected[0], 'values')
+        # Columns: Condition, Substrate ID, Pixel, Avg PCE, Fwd PCE, Rev PCE, ...
+        condition = item_values[0]
+        subid = item_values[1]
+        pixel = item_values[2]
+        avg_pce = item_values[3]
+
+        # Look up pair by condition (group key), fall back to substrate ID
+        pair = self.best_pce_pairs.get(condition) or self.best_pce_pairs.get(subid)
+        if not pair:
+            return
+
+        fwd_fp = pair['fwd_filepath']
+        rev_fp = pair['rev_filepath']
+        p = pair.get('params', {})
+
+        # Clear previous plot
+        for w in self.best_pce_plot_frame.winfo_children():
+            w.destroy()
+
+        fig, ax = plt.subplots(figsize=(6, 5))
+
+        try:
+            colors = plt.rcParams['axes.prop_cycle'].by_key().get('color', ['#1f77b4', '#ff7f0e'])
+        except Exception:
+            colors = ['#1f77b4', '#ff7f0e']
+
+        # Plot forward
+        try:
+            df_fw = self.parse_iv_data_for_plot(fwd_fp)
+            area_fw = df_fw['Cell Area [cm2]'].iloc[0] if 'Cell Area [cm2]' in df_fw.columns else None
+            jd_fw = self.convert_to_current_density(df_fw['Current (A)'], area_fw)
+            ax.plot(df_fw['Voltage (V)'], jd_fw, linestyle='-', color=colors[0], label="Forward")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to plot forward curve: {e}")
+
+        # Plot reverse
+        try:
+            df_rv = self.parse_iv_data_for_plot(rev_fp)
+            area_rv = df_rv['Cell Area [cm2]'].iloc[0] if 'Cell Area [cm2]' in df_rv.columns else None
+            jd_rv = self.convert_to_current_density(df_rv['Current (A)'], area_rv)
+            ax.plot(df_rv['Voltage (V)'], jd_rv, linestyle='--', color=colors[1], alpha=0.7, label="Reverse")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to plot reverse curve: {e}")
+
+        title_label = condition if condition != '—' else subid
+        ax.set_title(f"{title_label} — {subid} Pixel {pixel} — Avg PCE: {avg_pce}%", fontsize=11)
+        ax.set_xlabel("Voltage (V)", fontsize=12)
+        ax.set_ylabel("Current Density (mA/cm²)", fontsize=12)
+        ax.grid(True, alpha=0.4)
+        ax.legend(fontsize=9, loc='upper left')
+
+        # Build parameter table as text annotation
+        param_text = (
+            f"{'':8s} {'Fwd':>8s}  {'Rev':>8s}\n"
+            f"{'PCE [%]':8s} {p.get('Fwd PCE [%]',''):>8}  {p.get('Rev PCE [%]',''):>8}\n"
+            f"{'Voc [V]':8s} {p.get('Fwd Voc [V]',''):>8}  {p.get('Rev Voc [V]',''):>8}\n"
+            f"{'Jsc':8s} {p.get('Fwd Jsc [mA/cm2]',''):>8}  {p.get('Rev Jsc [mA/cm2]',''):>8}\n"
+            f"{'FF [%]':8s} {p.get('Fwd FF [%]',''):>8}  {p.get('Rev FF [%]',''):>8}"
+        )
+        ax.text(0.98, 0.02, param_text, transform=ax.transAxes,
+                fontsize=8, fontfamily='monospace', verticalalignment='bottom',
+                horizontalalignment='right',
+                bbox=dict(boxstyle='round,pad=0.4', facecolor='wheat', alpha=0.8))
+
+        plt.tight_layout()
+
+        canvas = FigureCanvasTkAgg(fig, master=self.best_pce_plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    def export_best_pce(self):
+        """Export best PCE table to Excel/CSV."""
+        if not hasattr(self, '_best_pce_results') or not self._best_pce_results:
+            messagebox.showwarning("Warning", "No best PCE data to export. Click 'Refresh Best PCE' first.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Export Best PCE Data"
+        )
+        if not file_path:
+            return
+
+        try:
+            export_cols = ['Condition', 'Substrate ID', 'Pixel', 'Avg PCE [%]', 'Fwd PCE [%]', 'Rev PCE [%]',
+                           'Avg Voc [V]', 'Avg Jsc [mA/cm2]', 'Avg FF [%]']
+            export_df = pd.DataFrame(self._best_pce_results)[export_cols]
+
+            if file_path.lower().endswith('.csv'):
+                export_df.to_csv(file_path, index=False)
+            else:
+                export_df.to_excel(file_path, index=False, sheet_name='Best PCE')
+
+            messagebox.showinfo("Success", f"Exported {len(export_df)} cells to:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export: {e}")
+
 
 if __name__ == "__main__":
     root = tk.Tk()

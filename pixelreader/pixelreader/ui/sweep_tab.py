@@ -36,63 +36,97 @@ class SweepTabMixin:
         # Parameter analysis controls
         ttk.Label(sweep_side, text="Analysis Options", font=("Arial", 10, "bold")).grid(row=4, column=0, sticky="w")
 
+        # Substrate selection (multi-select)
+        ttk.Label(sweep_side, text="Substrate (Ctrl+Click):").grid(row=5, column=0, sticky="w", pady=(5, 0))
+
+        # Frame for substrate listbox and scrollbar
+        substrate_frame = ttk.Frame(sweep_side)
+        substrate_frame.grid(row=6, column=0, sticky="ew", pady=2)
+
+        self.substrate_listbox = tk.Listbox(substrate_frame, height=4, selectmode=tk.EXTENDED, exportselection=False)
+        self.substrate_listbox.grid(row=0, column=0, sticky="ew")
+        self.substrate_listbox.bind("<<ListboxSelect>>", lambda e: self.update_parameter_plot())
+
+        substrate_scroll = ttk.Scrollbar(substrate_frame, orient="vertical", command=self.substrate_listbox.yview)
+        substrate_scroll.grid(row=0, column=1, sticky="ns")
+        self.substrate_listbox.config(yscrollcommand=substrate_scroll.set)
+
+        substrate_frame.columnconfigure(0, weight=1)
+
+        # Pixel number selection
+        ttk.Label(sweep_side, text="Pixel Number:").grid(row=7, column=0, sticky="w", pady=(5, 0))
+        self.pixel_filter_var = tk.StringVar(value="All")
+        self.pixel_filter_cb = ttk.Combobox(sweep_side, textvariable=self.pixel_filter_var,
+                                           state="readonly", width=30)
+        self.pixel_filter_cb.grid(row=8, column=0, sticky="ew", pady=2)
+        self.pixel_filter_cb.bind("<<ComboboxSelected>>", self.update_parameter_plot)
+
+        # Thickness/Position selection (1=thick, 6=thin)
+        ttk.Label(sweep_side, text="Thickness Position:").grid(row=9, column=0, sticky="w", pady=(5, 0))
+        self.position_filter_var = tk.StringVar(value="All")
+        self.position_filter_cb = ttk.Combobox(sweep_side, textvariable=self.position_filter_var,
+                                               values=["All", "1 (thickest)", "2", "3", "4", "5", "6 (thinnest)"],
+                                               state="readonly", width=30)
+        self.position_filter_cb.grid(row=10, column=0, sticky="ew", pady=2)
+        self.position_filter_cb.bind("<<ComboboxSelected>>", self.update_parameter_plot)
+
         # X-axis parameter selection
-        ttk.Label(sweep_side, text="X-axis Parameter:").grid(row=5, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(sweep_side, text="X-axis Parameter:").grid(row=11, column=0, sticky="w", pady=(5, 0))
         self.x_param_var = tk.StringVar(value="")
         self.x_param_cb = ttk.Combobox(sweep_side, textvariable=self.x_param_var,
                                        state="readonly", width=30)
-        self.x_param_cb.grid(row=6, column=0, sticky="ew", pady=2)
+        self.x_param_cb.grid(row=12, column=0, sticky="ew", pady=2)
         self.x_param_cb.bind("<<ComboboxSelected>>", self.update_parameter_plot)
 
         # Y-axis parameter selection (flexible - can be any parameter or performance metric)
-        ttk.Label(sweep_side, text="Y-axis Parameter:").grid(row=7, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(sweep_side, text="Y-axis Parameter:").grid(row=13, column=0, sticky="w", pady=(5, 0))
         self.y_param_var = tk.StringVar(value="PCE_pct")
         self.y_param_cb = ttk.Combobox(sweep_side, textvariable=self.y_param_var,
                                        state="readonly", width=30)
-        self.y_param_cb.grid(row=8, column=0, sticky="ew", pady=2)
+        self.y_param_cb.grid(row=14, column=0, sticky="ew", pady=2)
         self.y_param_cb.bind("<<ComboboxSelected>>", self.update_parameter_plot)
 
         # Optional second parameter for 2D plots
-        ttk.Label(sweep_side, text="Color Parameter (optional):").grid(row=9, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(sweep_side, text="Color Parameter (optional):").grid(row=15, column=0, sticky="w", pady=(5, 0))
         self.color_param_var = tk.StringVar(value="None")
         self.color_param_cb = ttk.Combobox(sweep_side, textvariable=self.color_param_var,
                                            state="readonly", width=30)
-        self.color_param_cb.grid(row=10, column=0, sticky="ew", pady=2)
+        self.color_param_cb.grid(row=16, column=0, sticky="ew", pady=2)
         self.color_param_cb.bind("<<ComboboxSelected>>", self.update_parameter_plot)
 
         # Plot type selection (enhanced with performance plotting options)
-        ttk.Label(sweep_side, text="Plot Type:").grid(row=11, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(sweep_side, text="Plot Type:").grid(row=17, column=0, sticky="w", pady=(5, 0))
         self.plot_type_var = tk.StringVar(value="scatter")
         plot_type_cb = ttk.Combobox(sweep_side, textvariable=self.plot_type_var,
                                     values=["scatter", "bubble", "line", "heatmap", "surface", "violin", "box", "parallel_coords"],
                                     state="readonly", width=20)
-        plot_type_cb.grid(row=12, column=0, sticky="ew", pady=2)
+        plot_type_cb.grid(row=18, column=0, sticky="ew", pady=2)
         plot_type_cb.bind("<<ComboboxSelected>>", self.update_parameter_plot)
 
-        ttk.Separator(sweep_side).grid(row=13, column=0, sticky="ew", pady=6)
+        ttk.Separator(sweep_side).grid(row=19, column=0, sticky="ew", pady=6)
 
         # Plot control buttons
-        ttk.Button(sweep_side, text="Update Plot", command=self.update_parameter_plot).grid(row=14, column=0, sticky="ew", pady=2)
-        ttk.Button(sweep_side, text="Save Plot", command=self.save_parameter_plot).grid(row=15, column=0, sticky="ew", pady=2)
+        ttk.Button(sweep_side, text="Update Plot", command=self.update_parameter_plot).grid(row=20, column=0, sticky="ew", pady=2)
+        ttk.Button(sweep_side, text="Save Plot", command=self.save_parameter_plot).grid(row=21, column=0, sticky="ew", pady=2)
 
         # Data info
-        ttk.Label(sweep_side, text="Data Info", font=("Arial", 10, "bold")).grid(row=16, column=0, sticky="w", pady=(10, 2))
+        ttk.Label(sweep_side, text="Data Info", font=("Arial", 10, "bold")).grid(row=22, column=0, sticky="w", pady=(10, 2))
         self.param_info_text = tk.Text(sweep_side, height=6, width=30, wrap=tk.WORD)
-        self.param_info_text.grid(row=17, column=0, sticky="ew", pady=2)
+        self.param_info_text.grid(row=23, column=0, sticky="ew", pady=2)
         param_info_scroll = ttk.Scrollbar(sweep_side, command=self.param_info_text.yview)
         self.param_info_text.config(yscrollcommand=param_info_scroll.set)
 
-        ttk.Separator(sweep_side).grid(row=18, column=0, sticky="ew", pady=6)
+        ttk.Separator(sweep_side).grid(row=24, column=0, sticky="ew", pady=6)
 
         # Multi-box plot controls
-        ttk.Label(sweep_side, text="Multi-Box Plots", font=("Arial", 10, "bold")).grid(row=19, column=0, sticky="w", pady=(5, 2))
+        ttk.Label(sweep_side, text="Multi-Box Plots", font=("Arial", 10, "bold")).grid(row=25, column=0, sticky="w", pady=(5, 2))
 
         # Multi-column selection for box plot grouping
-        ttk.Label(sweep_side, text="Select Columns (Ctrl+Click):").grid(row=20, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(sweep_side, text="Select Columns (Ctrl+Click):").grid(row=26, column=0, sticky="w", pady=(5, 0))
 
         # Frame for listbox and scrollbar
         listbox_frame = ttk.Frame(sweep_side)
-        listbox_frame.grid(row=21, column=0, sticky="ew", pady=2)
+        listbox_frame.grid(row=27, column=0, sticky="ew", pady=2)
 
         # Listbox for multi-selection
         self.boxplot_columns_listbox = tk.Listbox(listbox_frame, height=6, selectmode=tk.EXTENDED, exportselection=False)
@@ -107,27 +141,27 @@ class SweepTabMixin:
         listbox_frame.columnconfigure(0, weight=1)
 
         # Performance metric selection for box plot
-        ttk.Label(sweep_side, text="Performance Metric:").grid(row=22, column=0, sticky="w", pady=(5, 0))
+        ttk.Label(sweep_side, text="Performance Metric:").grid(row=28, column=0, sticky="w", pady=(5, 0))
         self.boxplot_metric_var = tk.StringVar(value="PCE_pct")
         boxplot_metric_cb = ttk.Combobox(sweep_side, textvariable=self.boxplot_metric_var,
                                          values=["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct"],
                                          state="readonly", width=30)
-        boxplot_metric_cb.grid(row=23, column=0, sticky="ew", pady=2)
+        boxplot_metric_cb.grid(row=29, column=0, sticky="ew", pady=2)
         boxplot_metric_cb.bind("<<ComboboxSelected>>", lambda e: self.generate_box_plot())
 
         # Control filtering checkbox
         self.include_controls_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(sweep_side, text="Include controls (all zeros)",
                        variable=self.include_controls_var,
-                       command=self.generate_box_plot).grid(row=24, column=0, sticky="w", pady=2)
+                       command=self.generate_box_plot).grid(row=30, column=0, sticky="w", pady=2)
 
         # Show mean checkbox
         self.show_mean_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(sweep_side, text="Show mean values",
                        variable=self.show_mean_var,
-                       command=self.generate_box_plot).grid(row=25, column=0, sticky="w", pady=2)
+                       command=self.generate_box_plot).grid(row=31, column=0, sticky="w", pady=2)
 
-        ttk.Button(sweep_side, text="Generate Box Plot", command=self.generate_box_plot).grid(row=26, column=0, sticky="ew", pady=2)
+        ttk.Button(sweep_side, text="Generate Box Plot", command=self.generate_box_plot).grid(row=32, column=0, sticky="ew", pady=2)
 
         # Right panel for parameter analysis
         sweep_right = ttk.Frame(self.sweep_frame, padding=8); sweep_right.grid(row=0, column=1, sticky="nsew")

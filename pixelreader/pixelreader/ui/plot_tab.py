@@ -762,7 +762,7 @@ class PlotTabMixin:
         # Format the plot
         self.jv_curve_ax.set_xlabel("Voltage (V)", fontsize=10)
         self.jv_curve_ax.set_ylabel("Current Density (mA/cm^2)", fontsize=10)
-        self.jv_curve_ax.set_title(f"S{substrate} C{composition} P{position}", fontsize=11, fontweight="bold")
+        self.jv_curve_ax.set_title(f"S{substrate} C{composition} P{position}", fontsize=11)
         self.jv_curve_ax.grid(True, alpha=0.3)
         self.jv_curve_ax.axhline(y=0, color="k", linestyle="-", linewidth=0.5)
         self.jv_curve_ax.axvline(x=0, color="k", linestyle="-", linewidth=0.5)
@@ -870,7 +870,7 @@ class PlotTabMixin:
         # Format the plot
         self.jv_curve_ax.set_xlabel("Voltage (V)", fontsize=10)
         self.jv_curve_ax.set_ylabel("Current Density (mA/cm²)", fontsize=10)
-        self.jv_curve_ax.set_title(f"S{substrate} C{composition} P{position}", fontsize=11, fontweight='bold')
+        self.jv_curve_ax.set_title(f"S{substrate} C{composition} P{position}", fontsize=11)
         self.jv_curve_ax.grid(True, alpha=0.3)
         self.jv_curve_ax.axhline(y=0, color='k', linestyle='-', linewidth=0.5)
         self.jv_curve_ax.axvline(x=0, color='k', linestyle='-', linewidth=0.5)
@@ -1034,14 +1034,18 @@ class PlotTabMixin:
             # Performance metrics that are always available from JV data
             performance_metrics = ["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "Rsc_ohmcm2"]
 
-            # Combine parameter columns with performance metrics for Y-axis
+            # Additional parameters from JV data table (Position: 1=thick, 6=thin)
+            jv_parameters = ["Position"]
+
+            # Combine parameter columns with performance metrics and JV parameters for axes
+            x_axis_options = all_columns + jv_parameters
             y_axis_options = performance_metrics + all_columns
 
             # Update dropdowns with available columns
             self.available_columns = all_columns
-            self.x_param_cb['values'] = all_columns
+            self.x_param_cb['values'] = x_axis_options
             self.y_param_cb['values'] = y_axis_options
-            self.color_param_cb['values'] = ['None'] + y_axis_options
+            self.color_param_cb['values'] = ['None'] + y_axis_options + jv_parameters
 
             # Populate box plot listbox with all columns
             self.boxplot_columns_listbox.delete(0, tk.END)
@@ -1057,11 +1061,40 @@ class PlotTabMixin:
             # Update info display
             self.update_parameter_info()
 
+            # Update substrate and pixel filters from the current JV data
+            self.update_substrate_pixel_filters()
+
             messagebox.showinfo("Success", f"Loaded Excel file with {len(self.parameter_data)} rows and {len(all_columns)} columns.")
 
         except Exception as e:
             messagebox.showerror("Load failed", f"Could not load parameter data from {excel_path}\n\nError: {str(e)}")
 
+
+    def update_substrate_pixel_filters(self):
+        """Update substrate and pixel filter dropdowns/listboxes based on current data"""
+        if self.df_with_flags is None or self.df_with_flags.empty:
+            return
+
+        # Get unique substrates from JV data and populate listbox
+        if 'substrate' in self.df_with_flags.columns and hasattr(self, 'substrate_listbox'):
+            unique_substrates = sorted(self.df_with_flags['substrate'].dropna().unique())
+
+            # Clear and repopulate listbox
+            self.substrate_listbox.delete(0, tk.END)
+            self.substrate_listbox.insert(tk.END, "All")
+            for substrate in unique_substrates:
+                self.substrate_listbox.insert(tk.END, str(int(substrate)))
+
+            # Select "All" by default
+            self.substrate_listbox.selection_set(0)
+
+        # Get unique pixel IDs from JV data
+        if 'pixel_id' in self.df_with_flags.columns:
+            unique_pixels = sorted(self.df_with_flags['pixel_id'].dropna().unique())
+            pixel_values = ["All"] + [str(int(p)) for p in unique_pixels]
+            self.pixel_filter_cb['values'] = pixel_values
+            if self.pixel_filter_var.get() not in pixel_values:
+                self.pixel_filter_var.set("All")
 
     def update_parameter_info(self):
         """Update the parameter info text display"""
@@ -1086,10 +1119,6 @@ class PlotTabMixin:
 
     def update_parameter_plot(self, event=None):
         """Generate parameter vs performance plots"""
-        if self.parameter_data is None:
-            self._clear_sweep_ax("No parameter data loaded.")
-            return
-
         if self.df_with_flags is None or self.df_with_flags.empty:
             self._clear_sweep_ax("No JV data available.")
             return
@@ -1101,6 +1130,14 @@ class PlotTabMixin:
 
         if not x_param:
             self._clear_sweep_ax("Please select an X-axis parameter.")
+            return
+
+        # Check if we're plotting JV-only parameters (Position) vs performance
+        jv_only_params = ['Position', 'substrate']
+        is_jv_only_plot = x_param in jv_only_params and y_param in ["Voc", "Jsc_mAcm2", "FF_pct", "PCE_pct", "Rsc_ohmcm2"]
+
+        if self.parameter_data is None and not is_jv_only_plot:
+            self._clear_sweep_ax("No parameter data loaded. Load Excel data or select Position as X-axis.")
             return
 
         # Try to match parameter data with JV data
@@ -1139,16 +1176,52 @@ class PlotTabMixin:
     def _merge_parameter_and_jv_data(self):
         """Merge parameter data with JV data.
 
+        Uses the table from the first tab (df_with_flags) and correlates with
+        uploaded Excel runsheet using substrate IDs and composition indices.
         The runsheet format has 11 rows per substrate, where the row index within
         each substrate group (0-10) corresponds to composition_index (1-11).
         This function creates a composition_index column in the parameter data
         and merges on both substrate and composition_index.
+
+        If parameter_data is None, returns JV data only (useful for Position/Thickness plots).
         """
-        if self.parameter_data is None or self.df_with_flags is None:
+        if self.df_with_flags is None:
             return None
 
-        # Try to find common columns for merging (substrate, sample, position, etc.)
+        # Start with JV data from the table (first tab)
         jv_data = self.df_with_flags.copy()
+
+        # Apply substrate filter (multi-select listbox)
+        if hasattr(self, 'substrate_listbox'):
+            try:
+                selected_indices = self.substrate_listbox.curselection()
+                if selected_indices:
+                    selected_substrates = [self.substrate_listbox.get(i) for i in selected_indices]
+
+                    # If "All" is not selected, filter by selected substrates
+                    if "All" not in selected_substrates:
+                        substrate_filter = [int(s) for s in selected_substrates]
+                        jv_data = jv_data[jv_data['substrate'].isin(substrate_filter)]
+            except (ValueError, KeyError, AttributeError):
+                pass
+
+        # Apply pixel filter
+        if hasattr(self, 'pixel_filter_var') and self.pixel_filter_var.get() != "All":
+            try:
+                pixel_filter = int(self.pixel_filter_var.get())
+                jv_data = jv_data[jv_data['pixel_id'] == pixel_filter]
+            except (ValueError, KeyError):
+                pass
+
+        # Apply position/thickness filter (1=thick, 6=thin)
+        if hasattr(self, 'position_filter_var') and self.position_filter_var.get() != "All":
+            try:
+                position_str = self.position_filter_var.get()
+                # Extract the position number (e.g., "1 (thickest)" -> 1)
+                position_filter = int(position_str.split()[0])
+                jv_data = jv_data[jv_data['position_in_composition'] == position_filter]
+            except (ValueError, KeyError, IndexError):
+                pass
 
         # Apply forward/reverse filtering
         if not self.combine_fr.get():
@@ -1156,6 +1229,15 @@ class PlotTabMixin:
             if self.include_forward.get(): keep.append("forward")
             if self.include_reverse.get(): keep.append("reverse")
             if keep: jv_data = jv_data[jv_data["direction"].isin(keep)]
+
+        # Add Position parameter based on position_in_composition
+        # Position 1 = thickest, Position 6 = thinnest
+        if 'position_in_composition' in jv_data.columns:
+            jv_data['Position'] = jv_data['position_in_composition']
+
+        # If no parameter data loaded, return JV data only (for Position/Thickness plots)
+        if self.parameter_data is None:
+            return jv_data
 
         param_data = self.parameter_data.copy()
 
@@ -1371,8 +1453,8 @@ class PlotTabMixin:
                 'Rsc_ohmcm2': 'Shunt Resistance (ohm*cm^2)'
             }
 
-            self.sweep_ax.set_xlabel('Parameter Groups', fontsize=12, fontweight='bold')
-            self.sweep_ax.set_ylabel(metric_labels.get(metric, metric), fontsize=12, fontweight='bold')
+            self.sweep_ax.set_xlabel('Parameter Groups', fontsize=12)
+            self.sweep_ax.set_ylabel(metric_labels.get(metric, metric), fontsize=12)
 
             # Create title with selected columns
             col_names_short = [c.replace(' (M)', '').replace(' (mg/mL)', '') for c in selected_columns]
@@ -1380,7 +1462,7 @@ class PlotTabMixin:
             title += f"Parameters: {', '.join(col_names_short)}"
             if not include_controls:
                 title += ' (Controls excluded)'
-            self.sweep_ax.set_title(title, fontsize=13, fontweight='bold')
+            self.sweep_ax.set_title(title, fontsize=13)
 
             self.sweep_ax.grid(True, alpha=0.3, linestyle='--', axis='y')
             self.sweep_ax.tick_params(axis='x', rotation=45, labelsize=9)
@@ -1549,7 +1631,7 @@ class PlotTabMixin:
         self.sweep_ax.set_xticklabels(grouped.index, rotation=45, ha='right')
         self.sweep_ax.set_xlabel('Well ID', fontsize=12)
         self.sweep_ax.set_ylabel(metric, fontsize=12)
-        self.sweep_ax.set_title(f'{metric} Comparison by Well', fontsize=14, fontweight='bold')
+        self.sweep_ax.set_title(f'{metric} Comparison by Well', fontsize=14)
         self.sweep_ax.grid(axis='y', alpha=0.3)
         self.sweep_fig.tight_layout()
 
@@ -1565,7 +1647,7 @@ class PlotTabMixin:
 
         self.sweep_ax.set_xlabel('Well ID', fontsize=12)
         self.sweep_ax.set_ylabel(metric, fontsize=12)
-        self.sweep_ax.set_title(f'{metric} Comparison by Well', fontsize=14, fontweight='bold')
+        self.sweep_ax.set_title(f'{metric} Comparison by Well', fontsize=14)
         self.sweep_ax.legend()
         self.sweep_ax.grid(axis='y', alpha=0.3)
         self.sweep_fig.tight_layout()
@@ -1580,7 +1662,7 @@ class PlotTabMixin:
         self.sweep_ax.set_xticklabels(grouped.index, rotation=45, ha='right')
         self.sweep_ax.set_xlabel('Well ID', fontsize=12)
         self.sweep_ax.set_ylabel(metric, fontsize=12)
-        self.sweep_ax.set_title(f'{metric} Comparison by Well', fontsize=14, fontweight='bold')
+        self.sweep_ax.set_title(f'{metric} Comparison by Well', fontsize=14)
         self.sweep_ax.grid(alpha=0.3)
         self.sweep_fig.tight_layout()
 
@@ -1599,7 +1681,7 @@ class PlotTabMixin:
             self.sweep_ax.boxplot(data_to_plot, labels=labels)
             self.sweep_ax.set_xlabel('Well ID', fontsize=12)
             self.sweep_ax.set_ylabel(metric, fontsize=12)
-            self.sweep_ax.set_title(f'{metric} Distribution by Well', fontsize=14, fontweight='bold')
+            self.sweep_ax.set_title(f'{metric} Distribution by Well', fontsize=14)
             self.sweep_ax.grid(axis='y', alpha=0.3)
             self.sweep_fig.tight_layout()
 
@@ -1628,7 +1710,22 @@ class PlotTabMixin:
             self._clear_sweep_ax("No valid data points for selected parameters.")
             return
 
-        if color_param and color_param != 'None' and color_param in filtered_data.columns:
+        # Check if multiple substrates are selected
+        multiple_substrates = ('substrate' in filtered_data.columns and
+                              filtered_data['substrate'].nunique() > 1)
+
+        if multiple_substrates and (not color_param or color_param == 'None'):
+            # Use substrate as color parameter when multiple substrates selected
+            unique_substrates = sorted(filtered_data.loc[valid_indices, 'substrate'].unique())
+            colors = plt.cm.Set2(np.linspace(0, 1, len(unique_substrates)))
+
+            for idx, substrate in enumerate(unique_substrates):
+                mask = filtered_data.loc[valid_indices, 'substrate'] == substrate
+                self.sweep_ax.scatter(x_values[mask], y_values[mask],
+                                    color=colors[idx], label=f'Substrate {int(substrate)}',
+                                    alpha=0.7, s=60)
+            self.sweep_ax.legend(loc='best')
+        elif color_param and color_param != 'None' and color_param in filtered_data.columns:
             color_values = filtered_data.loc[valid_indices, color_param]
             scatter = self.sweep_ax.scatter(x_values, y_values, c=color_values, cmap='viridis', alpha=0.7)
             self.sweep_fig.colorbar(scatter, ax=self.sweep_ax, label=color_param)
@@ -1643,19 +1740,44 @@ class PlotTabMixin:
 
     def _plot_parameter_line(self, data, x_param, y_param, color_param):
         """Create line plot of parameter vs performance"""
-        # Include all data points (including zero values)
-        grouped = data.groupby(x_param)[y_param].agg(['mean', 'std']).reset_index()
+        # Check if multiple substrates are selected
+        multiple_substrates = ('substrate' in data.columns and
+                              data['substrate'].nunique() > 1)
 
-        if grouped.empty:
-            self._clear_sweep_ax("No valid data for line plot.")
-            return
+        if multiple_substrates and (not color_param or color_param == 'None'):
+            # Plot separate lines for each substrate
+            unique_substrates = sorted(data['substrate'].unique())
+            colors = plt.cm.Set2(np.linspace(0, 1, len(unique_substrates)))
 
-        x_values = grouped[x_param]
-        y_means = grouped['mean']
-        y_stds = grouped['std'].fillna(0)
+            for idx, substrate in enumerate(unique_substrates):
+                substrate_data = data[data['substrate'] == substrate]
+                grouped = substrate_data.groupby(x_param)[y_param].agg(['mean', 'std']).reset_index()
 
-        self.sweep_ax.plot(x_values, y_means, 'o-', linewidth=2, markersize=6)
-        self.sweep_ax.fill_between(x_values, y_means - y_stds, y_means + y_stds, alpha=0.3)
+                if not grouped.empty:
+                    x_values = grouped[x_param]
+                    y_means = grouped['mean']
+                    y_stds = grouped['std'].fillna(0)
+
+                    self.sweep_ax.plot(x_values, y_means, 'o-', linewidth=2, markersize=6,
+                                     color=colors[idx], label=f'Substrate {int(substrate)}')
+                    self.sweep_ax.fill_between(x_values, y_means - y_stds, y_means + y_stds,
+                                              alpha=0.2, color=colors[idx])
+
+            self.sweep_ax.legend(loc='best')
+        else:
+            # Single substrate or color parameter specified - original behavior
+            grouped = data.groupby(x_param)[y_param].agg(['mean', 'std']).reset_index()
+
+            if grouped.empty:
+                self._clear_sweep_ax("No valid data for line plot.")
+                return
+
+            x_values = grouped[x_param]
+            y_means = grouped['mean']
+            y_stds = grouped['std'].fillna(0)
+
+            self.sweep_ax.plot(x_values, y_means, 'o-', linewidth=2, markersize=6)
+            self.sweep_ax.fill_between(x_values, y_means - y_stds, y_means + y_stds, alpha=0.3)
 
         self.sweep_ax.set_xlabel(x_param)
         self.sweep_ax.set_ylabel(y_param)
@@ -1850,6 +1972,14 @@ class PlotTabMixin:
             x_label = x_param.replace(' (M)', '').replace(' (mg/mL)', '')
             y_label = metric_labels.get(y_param, y_param)
 
+            # Check if multiple substrates are selected and no color param specified
+            multiple_substrates = ('substrate' in filtered_data.columns and
+                                  filtered_data['substrate'].nunique() > 1)
+
+            # Auto-use substrate as color parameter if multiple substrates and no color param
+            if multiple_substrates and (not color_param or color_param == 'None'):
+                color_param = 'substrate'
+
             # Check if we should group by color parameter
             use_color_grouping = (color_param and color_param != 'None' and
                                   color_param in filtered_data.columns)
@@ -1932,13 +2062,24 @@ class PlotTabMixin:
 
                 # Add legend for color parameter
                 color_label = color_param.replace(' (M)', '').replace(' (mg/mL)', '')
-                legend_elements = [Patch(facecolor=color_dict[val], edgecolor='black', alpha=0.7,
-                                        label=f"{color_label}={val:.3g}" if isinstance(val, (int, float)) else f"{color_label}={val}")
-                                  for val in unique_color_vals]
+                # Special formatting for specific parameters
+                if color_param == 'substrate':
+                    legend_elements = [Patch(facecolor=color_dict[val], edgecolor='black', alpha=0.7,
+                                            label=f"Substrate {int(val)}")
+                                      for val in unique_color_vals]
+                elif color_param == 'Position':
+                    # Position: 1=thickest, 6=thinnest
+                    legend_elements = [Patch(facecolor=color_dict[val], edgecolor='black', alpha=0.7,
+                                            label=f"Position {int(val)} ({'Thick' if val <= 3 else 'Thin'})")
+                                      for val in unique_color_vals]
+                else:
+                    legend_elements = [Patch(facecolor=color_dict[val], edgecolor='black', alpha=0.7,
+                                            label=f"{color_label}={val:.3g}" if isinstance(val, (int, float)) else f"{color_label}={val}")
+                                      for val in unique_color_vals]
                 self.sweep_ax.legend(handles=legend_elements, loc='best', fontsize=8, framealpha=0.9)
 
                 self.sweep_ax.set_title(f'Box Plot: {y_label} vs {x_label} (grouped by {color_label})',
-                                       fontsize=13, fontweight='bold')
+                                       fontsize=13)
             else:
                 # Original behavior: group only by x_param
                 grouped_data = []
@@ -1986,10 +2127,10 @@ class PlotTabMixin:
                                       ha='center', va='bottom', fontsize=8,
                                       bbox=dict(boxstyle='round,pad=0.2', facecolor='yellow', alpha=0.6))
 
-                self.sweep_ax.set_title(f'Box Plot: {y_label} vs {x_label}', fontsize=13, fontweight='bold')
+                self.sweep_ax.set_title(f'Box Plot: {y_label} vs {x_label}', fontsize=13)
 
-            self.sweep_ax.set_xlabel(x_label, fontsize=12, fontweight='bold')
-            self.sweep_ax.set_ylabel(y_label, fontsize=12, fontweight='bold')
+            self.sweep_ax.set_xlabel(x_label, fontsize=12)
+            self.sweep_ax.set_ylabel(y_label, fontsize=12)
             self.sweep_ax.grid(True, alpha=0.3, linestyle='--', axis='y')
             self.sweep_ax.tick_params(axis='x', rotation=45, labelsize=9)
             self.sweep_ax.tick_params(axis='y', labelsize=10)

@@ -159,6 +159,11 @@ class CompositionTabMixin:
         self._populate_substrate_combo()
         self._populate_sweep_filter_combo()
         self.refresh_table(); self.refresh_plots()
+        # Update substrate and pixel filters for sweep analysis tab
+        try:
+            self.update_substrate_pixel_filters()
+        except AttributeError:
+            pass  # Sweep tab not yet built
         # Clear any previous parameter plot
         try:
             self._clear_sweep_ax("Load parameter data to begin analysis.")
