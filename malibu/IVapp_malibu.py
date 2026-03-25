@@ -2422,6 +2422,8 @@ class IVDataAnalyzer:
         ax.set_title(f"{title_label} — {subid} Pixel {pixel} — Avg PCE: {avg_pce}%", fontsize=11)
         ax.set_xlabel("Voltage (V)", fontsize=12)
         ax.set_ylabel("Current Density (mA/cm²)", fontsize=12)
+        ax.set_xlim(0, 1.2)
+        ax.set_ylim(-22, 5)
         ax.grid(True, alpha=0.4)
         ax.legend(fontsize=9, loc='upper left')
 
