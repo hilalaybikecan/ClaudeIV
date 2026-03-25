@@ -509,11 +509,18 @@ class IVDataAnalyzer:
         if not filepaths:
             return
         
+        # Collect already-loaded filenames to skip duplicates
+        existing_filenames = set(self.measurements_data['Filename'].tolist()) if not self.measurements_data.empty else set()
+
         for filepath in filepaths:
+            filename = os.path.basename(filepath)
+            if filename in existing_filenames:
+                continue  # Skip already-loaded file
+
             # Extract data from file
             try:
                 data = self.parse_iv_file(filepath)
-                
+
                 # Add to both dataframes
                 # Align columns in case of new fields
                 for col in data.keys():
@@ -521,14 +528,15 @@ class IVDataAnalyzer:
                         self.measurements_data[col] = None
                 self.measurements_data = pd.concat([self.measurements_data, pd.DataFrame([data])], ignore_index=True)
                 self.measurements_data_original = self.measurements_data.copy()
-                
-                # Add to treeview
-                values = [data[col] for col in self.measurements_data.columns]
-                self.measurements_tree.insert('', 'end', values=values)
-                
+                existing_filenames.add(filename)
+
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to parse file {os.path.basename(filepath)}: {str(e)}")
         
+        # Deduplicate measurements by Filename
+        self.measurements_data = self.measurements_data.drop_duplicates(subset='Filename', keep='first').reset_index(drop=True)
+        self.measurements_data_original = self.measurements_data.copy()
+
         self.update_measurements_display()
         self.refresh_iv_selection()
 
@@ -1193,40 +1201,45 @@ class IVDataAnalyzer:
             return sorted(unique_conditions)
     
     def _filter_best_measurement(self, df):
-        """Keep only the best fwd/rev pair per cell (Substrate ID + Pixel).
+        """Keep only the single best fwd/rev pair per Substrate ID.
 
-        For each cell, fwd and rev rows are sorted by filename and paired
-        positionally (1st fwd with 1st rev, etc.).  The pair whose average
-        Efficiency is highest is retained; all other rows for that cell are
-        dropped.  Cells with only one scan direction are kept as-is.
+        For each Substrate ID, all pixels and repeat measurements are
+        considered.  Fwd and rev rows within each pixel are sorted by
+        filename and paired positionally.  The single pair with the
+        highest average Efficiency across all pixels is retained.
+        Substrate IDs with only one scan direction are kept as-is.
         """
         kept = []
-        for (subid, pixel), group in df.groupby(['Substrate ID', 'Pixel']):
-            fwd = group[group['Scan Direction'].str.lower().isin(['fwd', 'fw', 'forward'])].sort_values('Filename')
-            rev = group[group['Scan Direction'].str.lower().isin(['rev', 'rv', 'reverse'])].sort_values('Filename')
-
-            if fwd.empty or rev.empty:
-                # No pairing possible – keep all rows for this cell
-                kept.append(group)
-                continue
-
-            n_pairs = min(len(fwd), len(rev))
+        for subid, sub_group in df.groupby('Substrate ID'):
             best_avg = -float('inf')
             best_pair = None
-            for i in range(n_pairs):
-                fw_eff = pd.to_numeric(fwd.iloc[i].get('Efficiency [.]'), errors='coerce')
-                rv_eff = pd.to_numeric(rev.iloc[i].get('Efficiency [.]'), errors='coerce')
-                if pd.isna(fw_eff):
-                    fw_eff = 0.0
-                if pd.isna(rv_eff):
-                    rv_eff = 0.0
-                avg = (fw_eff + rv_eff) / 2.0
-                if avg > best_avg:
-                    best_avg = avg
-                    best_pair = (fwd.index[i], rev.index[i])
+            has_any_pair = False
+
+            for pixel, pix_group in sub_group.groupby('Pixel'):
+                fwd = pix_group[pix_group['Scan Direction'].str.lower().isin(['fwd', 'fw', 'forward'])].sort_values('Filename')
+                rev = pix_group[pix_group['Scan Direction'].str.lower().isin(['rev', 'rv', 'reverse'])].sort_values('Filename')
+
+                if fwd.empty or rev.empty:
+                    continue
+
+                has_any_pair = True
+                n_pairs = min(len(fwd), len(rev))
+                for i in range(n_pairs):
+                    fw_eff = pd.to_numeric(fwd.iloc[i].get('Efficiency [.]'), errors='coerce')
+                    rv_eff = pd.to_numeric(rev.iloc[i].get('Efficiency [.]'), errors='coerce')
+                    if pd.isna(fw_eff):
+                        fw_eff = 0.0
+                    if pd.isna(rv_eff):
+                        rv_eff = 0.0
+                    avg = (fw_eff + rv_eff) / 2.0
+                    if avg > best_avg:
+                        best_avg = avg
+                        best_pair = (fwd.index[i], rev.index[i])
 
             if best_pair is not None:
                 kept.append(df.loc[[best_pair[0], best_pair[1]]])
+            elif not has_any_pair:
+                kept.append(sub_group)
 
         if not kept:
             return pd.DataFrame(columns=df.columns)
@@ -1261,6 +1274,7 @@ class IVDataAnalyzer:
             return
 
         displayed_df = pd.DataFrame(displayed_data)
+        displayed_df = displayed_df.drop_duplicates(subset='Filename')
 
         # Convert numeric columns to proper numeric types
         numeric_columns = ['Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]',
@@ -1269,9 +1283,10 @@ class IVDataAnalyzer:
             if col in displayed_df.columns:
                 displayed_df[col] = pd.to_numeric(displayed_df[col], errors='coerce')
 
-        # Prepare data for plotting - merge with conditions
+        # Prepare data for plotting - merge with conditions (deduplicate to avoid row doubling)
+        conditions_dedup = self.conditions_data.drop_duplicates(subset='Substrate ID')
         plot_data = displayed_df.merge(
-            self.conditions_data,
+            conditions_dedup,
             on='Substrate ID',
             how='inner'
         )
@@ -1343,13 +1358,47 @@ class IVDataAnalyzer:
             ax = axes[i]
             slot = self.plot_slots[i]
 
-            # Create box plot with the selected palette and custom order
+            # Create box plot — avoid hue to prevent conflict with stripplot
+            if isinstance(palette, dict):
+                box_palette = [palette.get(c, "#1f77b4") for c in condition_order]
+            elif palette is not None:
+                try:
+                    box_palette = sns.color_palette(palette, n_colors=len(condition_order))
+                except Exception:
+                    box_palette = None
+            else:
+                box_palette = None
             sns.boxplot(data=plot_data, x='Condition', y=param, ax=ax,
-                        hue='Condition', palette=palette, order=condition_order, legend=False, showfliers=False)
-            sns.stripplot(data=plot_data, x='Condition', y=param,
-                          hue='Scan Direction', palette={'fwd': 'black', 'rev': 'red'},
-                          size=4, alpha=0.6, ax=ax, order=condition_order, dodge=False,
-                          legend=(i == 0))
+                        palette=box_palette, order=condition_order, legend=False, showfliers=False)
+
+            # Plot data points manually with matplotlib to avoid seaborn doubling
+            import numpy as np
+            # Get the actual x tick positions from the boxplot axes
+            tick_positions = {label.get_text(): pos for pos, label in
+                              zip(ax.get_xticks(), ax.get_xticklabels())}
+            # Fallback: if tick labels aren't set yet, use sequential positions
+            if not tick_positions or all(t == '' for t in tick_positions):
+                tick_positions = {c: idx for idx, c in enumerate(condition_order)}
+            dir_colors = {'fwd': 'black', 'rev': 'red'}
+            jitter_strength = 0.15
+            plotted_dirs = set()  # Reset per subplot so each gets a legend
+            for _, row in plot_data.iterrows():
+                cond = row.get('Condition', '')
+                if cond not in tick_positions:
+                    continue
+                x_pos = tick_positions[cond]
+                y_val = pd.to_numeric(row.get(param), errors='coerce')
+                if pd.isna(y_val):
+                    continue
+                scan_dir = str(row.get('Scan Direction', '')).lower().strip()
+                color = dir_colors.get(scan_dir, 'gray')
+                jitter = np.random.uniform(-jitter_strength, jitter_strength)
+                dir_label = {'fwd': 'Forward', 'rev': 'Reverse'}.get(scan_dir, scan_dir)
+                label = dir_label if scan_dir not in plotted_dirs else None
+                ax.scatter(x_pos + jitter, y_val, color=color, s=16, alpha=0.6,
+                           zorder=5, label=label)
+                if label:
+                    plotted_dirs.add(scan_dir)
 
             # Set y-axis limits if provided for this specific plot
             try:
@@ -1394,6 +1443,8 @@ class IVDataAnalyzer:
             # X-axis tick labels with user-defined angle
             ha = 'right' if xtick_angle > 0 else 'center'
             plt.setp(ax.xaxis.get_majorticklabels(), rotation=xtick_angle, ha=ha, fontsize=xtick_size)
+
+            ax.legend(fontsize=9, loc='best')
 
         # Hide unused subplots
         for i in range(n_plots, nrows * ncols):
