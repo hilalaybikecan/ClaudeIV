@@ -1,1 +1,1 @@
-{"custom_order": ["1.1M baseline + 4F", "1.1M baseline (3/2 fBPA) + 4F", "control", "3/2 fBPA", "3/2 fBPA+ 4F", "2/3 fBPA + 4F", "1/4 fBPA +4F", "max fBPA (2.5mM) + 4F", "baseline + fBPA pass"]}
+{"custom_order": ["control", "1.1M baseline + 4F", "1.1M baseline (3/2 fBPA) + 4F", "3:2  fBPA+ 4F", "2:3 fBPA + 4F", "1:4 fBPA +4F", "max fBPA (2.5mM) + 4F", "1.5mM fBPA (no pass.)", "baseline + fBPA pass"]}

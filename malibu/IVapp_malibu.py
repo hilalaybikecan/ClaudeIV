@@ -307,13 +307,22 @@ class IVDataAnalyzer:
 
         self.xorder_combobox = ttk.Combobox(
             xorder_frame,
-            values=["Display Order (Default)", "Alphabetical", "Custom"],
+            values=["Display Order (Default)", "Alphabetical", "Efficiency (high→low)", "Custom"],
             width=25,
             state="readonly"
         )
         self.xorder_combobox.pack(side="left", padx=5)
         self.xorder_combobox.current(0)
         self.xorder_combobox.bind("<<ComboboxSelected>>", self.on_xorder_change)
+
+        # Plot by Substrate ID mode (skip condition assignment)
+        substrate_mode_frame = ttk.Frame(plot_control_frame)
+        substrate_mode_frame.pack(fill="x", expand=False, padx=5, pady=5)
+
+        self.plot_by_substrate_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(substrate_mode_frame, text="Plot by Substrate ID (each sample is its own condition)",
+                        variable=self.plot_by_substrate_var,
+                        command=self.on_substrate_mode_change).pack(side="left", padx=5)
 
         # Best measurement filter
         best_meas_frame = ttk.Frame(plot_control_frame)
@@ -851,6 +860,12 @@ class IVDataAnalyzer:
             else:
                 self.measurements_tree.heading(column, text=clean_text)
     
+    def on_substrate_mode_change(self):
+        """Update the condition filter listbox when substrate mode is toggled."""
+        self.update_plot_conditions_listbox()
+        if self.xorder_combobox.get() == "Custom":
+            self.populate_conditions_listbox()
+
     def on_xorder_change(self, event=None):
         """Handle x-axis ordering combobox selection change"""
         selected_order = self.xorder_combobox.get()
@@ -863,48 +878,55 @@ class IVDataAnalyzer:
     def populate_conditions_listbox(self, custom_order=None):
         """Populate the conditions listbox with current conditions"""
         self.conditions_listbox.delete(0, tk.END)
-        
+
+        substrate_mode = hasattr(self, 'plot_by_substrate_var') and self.plot_by_substrate_var.get()
+
         # Get unique conditions from the data
-        if not self.measurements_data.empty and not self.conditions_data.empty:
+        if substrate_mode and not self.measurements_data.empty:
+            unique_conditions = sorted(self.measurements_data['Substrate ID'].unique())
+        elif not self.measurements_data.empty and not self.conditions_data.empty:
             # Get conditions that have associated measurements
             plot_data = self.measurements_data.merge(
-                self.conditions_data, 
-                on='Substrate ID', 
+                self.conditions_data,
+                on='Substrate ID',
                 how='inner'
             )
-            
-            if not plot_data.empty:
-                unique_conditions = plot_data['Condition'].unique()
-                
-                if custom_order:
-                    # Use provided custom order, then add any missing conditions
-                    for condition in custom_order:
-                        if condition in unique_conditions:
-                            self.conditions_listbox.insert(tk.END, condition)
-                    # Add any remaining conditions not in custom order
-                    for condition in unique_conditions:
-                        if condition not in custom_order:
-                            self.conditions_listbox.insert(tk.END, condition)
-                else:
-                    # Try to auto-load saved custom order
-                    auto_order = self.auto_load_custom_order()
-                    if auto_order:
-                        # Use auto-loaded order
-                        for condition in auto_order:
-                            if condition in unique_conditions:
-                                self.conditions_listbox.insert(tk.END, condition)
-                        # Add any remaining conditions not in auto order
-                        for condition in unique_conditions:
-                            if condition not in auto_order:
-                                self.conditions_listbox.insert(tk.END, condition)
-                    else:
-                        # Start with default order (Display Order)
-                        ordered_conditions = self.conditions_data.sort_values(by='Display Order')
-                        
-                        # Add conditions in display order
-                        for condition in ordered_conditions['Condition']:
-                            if condition in unique_conditions:
-                                self.conditions_listbox.insert(tk.END, condition)
+
+            if plot_data.empty:
+                return
+            unique_conditions = plot_data['Condition'].unique()
+        else:
+            return
+
+        if custom_order:
+            # Use provided custom order, then add any missing conditions
+            for condition in custom_order:
+                if condition in unique_conditions:
+                    self.conditions_listbox.insert(tk.END, condition)
+            # Add any remaining conditions not in custom order
+            for condition in unique_conditions:
+                if condition not in custom_order:
+                    self.conditions_listbox.insert(tk.END, condition)
+        else:
+            # Try to auto-load saved custom order
+            auto_order = self.auto_load_custom_order()
+            if auto_order:
+                for condition in auto_order:
+                    if condition in unique_conditions:
+                        self.conditions_listbox.insert(tk.END, condition)
+                for condition in unique_conditions:
+                    if condition not in auto_order:
+                        self.conditions_listbox.insert(tk.END, condition)
+            elif not substrate_mode and not self.conditions_data.empty:
+                # Start with default order (Display Order)
+                ordered_conditions = self.conditions_data.sort_values(by='Display Order')
+                for condition in ordered_conditions['Condition']:
+                    if condition in unique_conditions:
+                        self.conditions_listbox.insert(tk.END, condition)
+            else:
+                # Substrate mode or no conditions: use sorted unique_conditions
+                for condition in unique_conditions:
+                    self.conditions_listbox.insert(tk.END, condition)
     
     def move_condition_up(self):
         """Move selected condition up in the list"""
@@ -1157,11 +1179,22 @@ class IVDataAnalyzer:
         # Remember currently selected conditions
         selected_before = {self.plot_cond_listbox.get(i) for i in self.plot_cond_listbox.curselection()}
         self.plot_cond_listbox.delete(0, tk.END)
-        if self.conditions_data.empty:
-            return
-        unique_conds = self.conditions_data.sort_values('Display Order')['Condition'].unique()
-        for cond in unique_conds:
-            self.plot_cond_listbox.insert(tk.END, cond)
+
+        if hasattr(self, 'plot_by_substrate_var') and self.plot_by_substrate_var.get():
+            # Substrate ID mode: list all unique substrate IDs
+            if self.measurements_data.empty:
+                return
+            unique_items = self.measurements_data['Substrate ID'].unique()
+            for item in sorted(unique_items):
+                self.plot_cond_listbox.insert(tk.END, item)
+        else:
+            # Normal condition mode
+            if self.conditions_data.empty:
+                return
+            unique_items = self.conditions_data.sort_values('Display Order')['Condition'].unique()
+            for item in unique_items:
+                self.plot_cond_listbox.insert(tk.END, item)
+
         # Re-select all by default (or restore previous selection)
         for i in range(self.plot_cond_listbox.size()):
             cond = self.plot_cond_listbox.get(i)
@@ -1180,6 +1213,16 @@ class IVDataAnalyzer:
         unique_conditions = plot_data['Condition'].unique()
 
         if selected_order == "Alphabetical":
+            return sorted(unique_conditions)
+        elif selected_order == "Efficiency (high→low)":
+            # Compute median efficiency per condition, sort descending
+            eff_col = 'Efficiency [.]'
+            if eff_col in plot_data.columns:
+                plot_data[eff_col] = pd.to_numeric(plot_data[eff_col], errors='coerce')
+                median_eff = plot_data.groupby('Condition')[eff_col].median().sort_values(ascending=False)
+                ordered = [c for c in median_eff.index if c in unique_conditions]
+                remaining = [c for c in unique_conditions if c not in ordered]
+                return ordered + sorted(remaining)
             return sorted(unique_conditions)
         elif selected_order == "Custom":
             # Get order from listbox
@@ -1246,8 +1289,12 @@ class IVDataAnalyzer:
         return pd.concat(kept, ignore_index=True)
 
     def generate_plot(self):
-        if self.measurements_data.empty or self.conditions_data.empty:
+        substrate_mode = hasattr(self, 'plot_by_substrate_var') and self.plot_by_substrate_var.get()
+        if self.measurements_data.empty:
             messagebox.showwarning("Warning", "No data available for plotting.")
+            return
+        if not substrate_mode and self.conditions_data.empty:
+            messagebox.showwarning("Warning", "No conditions assigned. Assign conditions or enable 'Plot by Substrate ID'.")
             return
 
         # Get selected parameters from all plot slots
@@ -1283,13 +1330,19 @@ class IVDataAnalyzer:
             if col in displayed_df.columns:
                 displayed_df[col] = pd.to_numeric(displayed_df[col], errors='coerce')
 
-        # Prepare data for plotting - merge with conditions (deduplicate to avoid row doubling)
-        conditions_dedup = self.conditions_data.drop_duplicates(subset='Substrate ID')
-        plot_data = displayed_df.merge(
-            conditions_dedup,
-            on='Substrate ID',
-            how='inner'
-        )
+        # Prepare data for plotting
+        if substrate_mode:
+            # Each Substrate ID is its own condition
+            plot_data = displayed_df.copy()
+            plot_data['Condition'] = plot_data['Substrate ID']
+        else:
+            # Merge with conditions (deduplicate to avoid row doubling)
+            conditions_dedup = self.conditions_data.drop_duplicates(subset='Substrate ID')
+            plot_data = displayed_df.merge(
+                conditions_dedup,
+                on='Substrate ID',
+                how='inner'
+            )
 
         if plot_data.empty:
             messagebox.showwarning("Warning", "No data available after joining measurements with conditions.")
@@ -1395,8 +1448,8 @@ class IVDataAnalyzer:
                 jitter = np.random.uniform(-jitter_strength, jitter_strength)
                 dir_label = {'fwd': 'Forward', 'rev': 'Reverse'}.get(scan_dir, scan_dir)
                 label = dir_label if scan_dir not in plotted_dirs else None
-                ax.scatter(x_pos + jitter, y_val, color=color, s=16, alpha=0.6,
-                           zorder=5, label=label)
+                ax.scatter(x_pos + jitter, y_val, color=color, s=12, alpha=0.7,
+                           zorder=5, edgecolors='white', linewidths=0.3, label=label)
                 if label:
                     plotted_dirs.add(scan_dir)
 
@@ -2272,6 +2325,7 @@ class IVDataAnalyzer:
 
         ttk.Button(control_frame, text="Refresh Best PCE", command=self.compute_best_pce).pack(side="left", padx=5, pady=5)
         ttk.Button(control_frame, text="Export to Excel", command=self.export_best_pce).pack(side="left", padx=5, pady=5)
+        ttk.Button(control_frame, text="Export to Existing Excel", command=self.export_best_pce_to_existing).pack(side="left", padx=5, pady=5)
 
         # Table
         table_frame = ttk.LabelFrame(left_frame, text="Best PCE per Cell (click row to plot JV)")
@@ -2522,6 +2576,166 @@ class IVDataAnalyzer:
                 export_df.to_excel(file_path, index=False, sheet_name='Best PCE')
 
             messagebox.showinfo("Success", f"Exported {len(export_df)} cells to:\n{file_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to export: {e}")
+
+
+    def export_best_pce_to_existing(self):
+        """Open an existing Excel file, match Substrate IDs, and add Avg PCE column."""
+        if not hasattr(self, '_best_pce_results') or not self._best_pce_results:
+            messagebox.showwarning("Warning", "No best PCE data to export. Click 'Refresh Best PCE' first.")
+            return
+
+        # Ask user to pick existing Excel file
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Excel files", "*.xlsx"), ("All files", "*.*")],
+            title="Select Existing Excel File to Add PCE Data"
+        )
+        if not file_path:
+            return
+
+        try:
+            import openpyxl
+        except ImportError:
+            messagebox.showerror("Missing Dependency",
+                                 "This feature requires 'openpyxl'.\n\nInstall with: pip install openpyxl")
+            return
+
+        try:
+            # Read the existing Excel file
+            existing_df = pd.read_excel(file_path, engine='openpyxl')
+
+            # Find the column that contains sample/substrate IDs
+            # Try common column names
+            id_column = None
+            for col in existing_df.columns:
+                col_lower = str(col).lower().strip()
+                if col_lower in ('substrate id', 'substrate_id', 'sample id', 'sample_id',
+                                 'deposition id', 'deposition_id', 'id', 'sample', 'substrate'):
+                    id_column = col
+                    break
+
+            if id_column is None:
+                # Show a dialog letting the user pick the column
+                col_picker = tk.Toplevel(self.root)
+                col_picker.title("Select ID Column")
+                col_picker.geometry("350x200")
+                col_picker.grab_set()
+
+                ttk.Label(col_picker, text="Which column contains the Sample/Substrate IDs?").pack(padx=10, pady=10)
+
+                col_var = tk.StringVar()
+                col_combo = ttk.Combobox(col_picker, values=list(existing_df.columns), textvariable=col_var,
+                                         state="readonly", width=40)
+                col_combo.pack(padx=10, pady=5)
+                if len(existing_df.columns) > 0:
+                    col_combo.current(0)
+
+                result = {'column': None}
+
+                def on_ok():
+                    result['column'] = col_var.get()
+                    col_picker.destroy()
+
+                ttk.Button(col_picker, text="OK", command=on_ok).pack(pady=10)
+                self.root.wait_window(col_picker)
+
+                id_column = result['column']
+                if not id_column:
+                    return
+
+            # Compute best avg PCE per Substrate ID (not per condition group)
+            # so every substrate gets its own value for matching
+            meas_df = self.measurements_data.copy()
+            meas_df['Efficiency [.]'] = pd.to_numeric(meas_df['Efficiency [.]'], errors='coerce')
+            meas_df['__dir__'] = meas_df['Scan Direction'].astype(str).str.lower().str.strip()
+            meas_df['__dir__'] = meas_df['__dir__'].replace({'fw': 'fwd', 'forward': 'fwd', 'reverse': 'rev', 'rv': 'rev'})
+
+            pce_map = {}
+            for subid, sub_group in meas_df.groupby('Substrate ID'):
+                best_avg = -float('inf')
+                for pixel, pix_group in sub_group.groupby('Pixel'):
+                    fwd_rows = pix_group[pix_group['__dir__'] == 'fwd'].sort_values('Filename')
+                    rev_rows = pix_group[pix_group['__dir__'] == 'rev'].sort_values('Filename')
+                    if fwd_rows.empty or rev_rows.empty:
+                        continue
+                    n_pairs = min(len(fwd_rows), len(rev_rows))
+                    for i in range(n_pairs):
+                        fw_eff = fwd_rows.iloc[i]['Efficiency [.]']
+                        rv_eff = rev_rows.iloc[i]['Efficiency [.]']
+                        fw_eff = fw_eff if not pd.isna(fw_eff) else 0.0
+                        rv_eff = rv_eff if not pd.isna(rv_eff) else 0.0
+                        avg = (fw_eff + rv_eff) / 2.0
+                        if avg > best_avg:
+                            best_avg = avg
+                if best_avg > -float('inf'):
+                    pce_map[str(subid).strip()] = round(best_avg, 3)
+
+            # Normalize ID strings: strip whitespace and remove ".0" float suffix
+            def normalize_id(val):
+                s = str(val).strip()
+                if s.endswith('.0'):
+                    s = s[:-2]
+                return s
+
+            # Normalize pce_map keys
+            pce_map = {normalize_id(k): v for k, v in pce_map.items()}
+
+            # Match Substrate IDs and build the new column values
+            id_values = existing_df[id_column].apply(normalize_id)
+            pce_values = id_values.map(pce_map)
+
+            matched = pce_values.notna().sum()
+            total = len(existing_df)
+
+            # Check for unmatched IDs and warn before writing
+            unmatched_excel = sorted(set(id_values[pce_values.isna()].unique()) - {'', 'nan', 'None'})
+            if unmatched_excel:
+                id_list = ', '.join(unmatched_excel)
+                proceed = messagebox.askyesno(
+                    "Unmatched Sample IDs",
+                    f"Matched {matched}/{total} rows.\n\n"
+                    f"No Malibu measurement data for ID(s): {id_list}\n\n"
+                    f"These cells will be left empty. Continue with export?"
+                )
+                if not proceed:
+                    return
+
+            # Use openpyxl directly to add/overwrite a single column,
+            # preserving all existing sheets, formatting, etc.
+            wb = openpyxl.load_workbook(file_path)
+            ws = wb.active
+
+            # Find or create the target column
+            col_name = 'Avg PCE [%] (Malibu)'
+            target_col = None
+            for c in range(1, ws.max_column + 1):
+                if ws.cell(row=1, column=c).value == col_name:
+                    target_col = c
+                    break
+            if target_col is None:
+                target_col = ws.max_column + 1
+                ws.cell(row=1, column=target_col, value=col_name)
+
+            # Write the PCE values
+            for i, val in enumerate(pce_values):
+                cell = ws.cell(row=i + 2, column=target_col)
+                if pd.notna(val):
+                    cell.value = val
+                else:
+                    cell.value = None
+
+            wb.save(file_path)
+            wb.close()
+
+            messagebox.showinfo("Success",
+                                f"Added '{col_name}' column to:\n{file_path}\n\n"
+                                f"Matched {matched}/{total} rows.")
+
+        except PermissionError:
+            messagebox.showerror("File In Use",
+                                 "Cannot write to the file — it may be open in Excel.\n\n"
+                                 "Please close the file and try again.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to export: {e}")
 
