@@ -95,11 +95,16 @@ class IVDataAnalyzer:
         best_pce_frame = ttk.Frame(notebook)
         notebook.add(best_pce_frame, text="Best PCE")
 
+        # Condition Sheet tab
+        cond_sheet_frame = ttk.Frame(notebook)
+        notebook.add(cond_sheet_frame, text="Condition Sheet")
+
         # Setup UI components
         self.setup_data_management(data_frame)
         self.setup_plotting(plot_frame)
         self.setup_iv_plot(iv_plot_frame)
         self.setup_best_pce_tab(best_pce_frame)
+        self.setup_condition_sheet_tab(cond_sheet_frame)
 
     
     def setup_data_management(self, parent):
@@ -2738,6 +2743,333 @@ class IVDataAnalyzer:
                                  "Please close the file and try again.")
         except Exception as e:
             messagebox.showerror("Error", f"Failed to export: {e}")
+
+
+    # ── Condition Sheet tab ──────────────────────────────────────────────
+    def setup_condition_sheet_tab(self, parent):
+        """Tab for loading an Excel condition sheet and plotting parameters vs conditions."""
+        self.condition_sheet_df = None
+        self._perf_columns = ['Efficiency [.]', 'FF [.]', 'Voc [V]', 'Jsc [mA/cm2]',
+                              'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]']
+
+        # Row 1: Load + ID column
+        row1 = ttk.LabelFrame(parent, text="Condition Sheet")
+        row1.pack(fill="x", padx=10, pady=(5, 2))
+
+        ttk.Button(row1, text="Load Excel Sheet", command=self.load_condition_sheet).pack(side="left", padx=5, pady=5)
+
+        ttk.Label(row1, text="Sample ID column:").pack(side="left", padx=(15, 5))
+        self.cond_sheet_id_var = tk.StringVar()
+        self.cond_sheet_id_combo = ttk.Combobox(row1, textvariable=self.cond_sheet_id_var,
+                                                 width=20, state="readonly")
+        self.cond_sheet_id_combo.pack(side="left", padx=5, pady=5)
+
+        self.cond_sheet_best_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row1, text="Best meas. only", variable=self.cond_sheet_best_var).pack(side="left", padx=(15, 5))
+
+        # Row 2: Axis selectors + plot mode
+        row2 = ttk.LabelFrame(parent, text="Plot Axes")
+        row2.pack(fill="x", padx=10, pady=(2, 2))
+
+        ttk.Label(row2, text="X:").pack(side="left", padx=(5, 2))
+        self.cond_sheet_column_var = tk.StringVar()
+        self.cond_sheet_column_combo = ttk.Combobox(row2, textvariable=self.cond_sheet_column_var,
+                                                     width=22, state="readonly")
+        self.cond_sheet_column_combo.pack(side="left", padx=2, pady=5)
+
+        ttk.Label(row2, text="Y:").pack(side="left", padx=(10, 2))
+        self.cond_sheet_y_var = tk.StringVar(value='Efficiency [.]')
+        self.cond_sheet_y_combo = ttk.Combobox(row2, textvariable=self.cond_sheet_y_var,
+                                                width=22, state="readonly")
+        self.cond_sheet_y_combo['values'] = self._perf_columns
+        self.cond_sheet_y_combo.pack(side="left", padx=2, pady=5)
+
+        ttk.Label(row2, text="Color:").pack(side="left", padx=(10, 2))
+        self.cond_sheet_color_var = tk.StringVar(value='(None)')
+        self.cond_sheet_color_combo = ttk.Combobox(row2, textvariable=self.cond_sheet_color_var,
+                                                    width=22, state="readonly")
+        self.cond_sheet_color_combo['values'] = ['(None)'] + self._perf_columns
+        self.cond_sheet_color_combo.pack(side="left", padx=2, pady=5)
+
+        ttk.Label(row2, text="Mode:").pack(side="left", padx=(10, 2))
+        self.cond_sheet_mode_var = tk.StringVar(value='Box + Scatter')
+        ttk.Combobox(row2, textvariable=self.cond_sheet_mode_var,
+                     values=['Box + Scatter', 'Scatter 2D', 'Scatter 3D'], width=14,
+                     state="readonly").pack(side="left", padx=2, pady=5)
+
+        ttk.Button(row2, text="Plot", command=self.generate_condition_sheet_plot).pack(side="left", padx=10, pady=5)
+        ttk.Button(row2, text="Save Plot", command=self.save_condition_sheet_plot).pack(side="left", padx=5, pady=5)
+
+        # Plot area
+        self.cond_sheet_plot_frame = ttk.Frame(parent)
+        self.cond_sheet_plot_frame.pack(fill="both", expand=True, padx=10, pady=5)
+
+        self.cond_sheet_figure = None
+
+    def load_condition_sheet(self):
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Excel files", "*.xlsx *.xls"), ("CSV files", "*.csv"), ("All files", "*.*")],
+            title="Select Condition Sheet"
+        )
+        if not file_path:
+            return
+        try:
+            if file_path.endswith('.csv'):
+                self.condition_sheet_df = pd.read_csv(file_path)
+            else:
+                self.condition_sheet_df = pd.read_excel(file_path)
+
+            columns = list(self.condition_sheet_df.columns)
+            self.cond_sheet_id_combo['values'] = columns
+            # Auto-select first column as ID if it contains "ID" or "id"
+            id_col = next((c for c in columns if 'id' in c.lower()), columns[0])
+            self.cond_sheet_id_var.set(id_col)
+
+            # Build combined list: sheet columns + performance params (deduplicated)
+            all_choices = columns + [p for p in self._perf_columns if p not in columns]
+            self.cond_sheet_column_combo['values'] = all_choices
+            self.cond_sheet_y_combo['values'] = all_choices
+            self.cond_sheet_color_combo['values'] = ['(None)'] + all_choices
+
+            if len(columns) > 1:
+                other = [c for c in columns if c != id_col]
+                self.cond_sheet_column_var.set(other[0] if other else columns[0])
+            messagebox.showinfo("Loaded", f"Loaded {len(self.condition_sheet_df)} rows, {len(columns)} columns.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load file: {e}")
+
+    def _build_condition_sheet_merged(self):
+        """Merge condition sheet with measurements, return (merged_df, sheet_columns_used) or None."""
+        import numpy as np
+
+        if self.condition_sheet_df is None:
+            messagebox.showwarning("Warning", "Load a condition sheet first.")
+            return None
+        if self.measurements_data.empty:
+            messagebox.showwarning("Warning", "No measurement data loaded.")
+            return None
+
+        id_col = self.cond_sheet_id_var.get()
+        if not id_col:
+            messagebox.showwarning("Warning", "Select a Sample ID column.")
+            return None
+
+        x_col = self.cond_sheet_column_var.get()
+        y_col = self.cond_sheet_y_var.get()
+        color_col = self.cond_sheet_color_var.get()
+        if color_col == '(None)':
+            color_col = None
+
+        if not x_col or not y_col:
+            messagebox.showwarning("Warning", "Select both X and Y axes.")
+            return None
+
+        # Determine which columns come from the sheet vs measurements
+        sheet_cols_available = set(self.condition_sheet_df.columns)
+        needed_from_sheet = [c for c in [x_col, y_col, color_col] if c and c in sheet_cols_available and c != id_col]
+        # Always include ID
+        keep_sheet = list(set([id_col] + needed_from_sheet))
+
+        sheet = self.condition_sheet_df[keep_sheet].copy()
+        sheet.rename(columns={id_col: 'Substrate ID'}, inplace=True)
+        sheet['Substrate ID'] = sheet['Substrate ID'].astype(str).str.strip()
+        sheet = sheet.drop_duplicates(subset='Substrate ID')
+
+        meas = self.measurements_data.copy()
+        meas = meas.drop_duplicates(subset='Filename')
+        meas['Substrate ID'] = meas['Substrate ID'].astype(str).str.strip()
+
+        merged = meas.merge(sheet, on='Substrate ID', how='inner')
+        if merged.empty:
+            messagebox.showwarning("Warning",
+                                   "No matching Substrate IDs found between measurements and condition sheet.\n\n"
+                                   f"Sheet IDs (first 5): {list(sheet['Substrate ID'].unique()[:5])}\n"
+                                   f"Measurement IDs (first 5): {list(meas['Substrate ID'].unique()[:5])}")
+            return None
+
+        if self.cond_sheet_best_var.get():
+            merged = self._filter_best_measurement(merged)
+            if merged.empty:
+                messagebox.showwarning("Warning", "No complete fwd/rev pairs found.")
+                return None
+
+        # Coerce numeric where possible
+        for c in [x_col, y_col, color_col]:
+            if c and c in merged.columns:
+                merged[c] = pd.to_numeric(merged[c], errors='coerce').fillna(merged[c])
+
+        return merged
+
+    def generate_condition_sheet_plot(self):
+        import numpy as np
+        from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+
+        merged = self._build_condition_sheet_merged()
+        if merged is None:
+            return
+
+        x_col = self.cond_sheet_column_var.get()
+        y_col = self.cond_sheet_y_var.get()
+        color_col = self.cond_sheet_color_var.get()
+        if color_col == '(None)':
+            color_col = None
+        mode = self.cond_sheet_mode_var.get()
+
+        # Clear previous plot
+        for widget in self.cond_sheet_plot_frame.winfo_children():
+            widget.destroy()
+
+        if mode == 'Box + Scatter':
+            self._plot_condition_box(merged, x_col, y_col, np)
+        elif mode == 'Scatter 2D':
+            self._plot_condition_scatter2d(merged, x_col, y_col, color_col, np)
+        elif mode == 'Scatter 3D':
+            if not color_col:
+                messagebox.showwarning("Warning", "Select a Color axis for 3D plot (used as Z-axis).")
+                return
+            self._plot_condition_scatter3d(merged, x_col, y_col, color_col, np)
+
+    def _plot_condition_box(self, merged, x_col, y_param, np):
+        """Original box + scatter plot."""
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        merged[y_param] = pd.to_numeric(merged[y_param], errors='coerce')
+
+        x_numeric = pd.to_numeric(merged[x_col], errors='coerce')
+        is_numeric = x_numeric.notna().sum() > len(merged) * 0.5
+        if is_numeric:
+            merged['_x_group'] = x_numeric.round(5).astype(str)
+        else:
+            merged['_x_group'] = merged[x_col].astype(str)
+
+        unique_groups = merged['_x_group'].dropna().unique()
+        try:
+            order = sorted(unique_groups, key=float)
+        except (ValueError, TypeError):
+            order = sorted(unique_groups, key=str)
+
+        sns.boxplot(data=merged, x='_x_group', y=y_param, ax=ax, order=order, showfliers=False)
+
+        dir_colors = {'fwd': 'black', 'rev': 'red'}
+        tick_positions = {label: idx for idx, label in enumerate(order)}
+        jitter_strength = 0.15
+        plotted_dirs = set()
+        for _, row in merged.iterrows():
+            grp = row['_x_group']
+            if grp not in tick_positions:
+                continue
+            y_val = row[y_param]
+            if pd.isna(y_val):
+                continue
+            scan_dir = str(row.get('Scan Direction', '')).lower().strip()
+            color = dir_colors.get(scan_dir, 'gray')
+            jitter = np.random.uniform(-jitter_strength, jitter_strength)
+            label = scan_dir.capitalize() if scan_dir not in plotted_dirs else None
+            ax.scatter(tick_positions[grp] + jitter, y_val, color=color, s=12, alpha=0.7,
+                       zorder=5, edgecolors='white', linewidths=0.3, label=label)
+            if label:
+                plotted_dirs.add(scan_dir)
+
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right', fontsize=12)
+        ax.set_xlabel(x_col, fontsize=14)
+        ax.set_ylabel(y_param, fontsize=14)
+        ax.legend(fontsize=9, loc='best')
+        ax.grid(True, axis='y', alpha=0.4, linestyle='--')
+        plt.tight_layout()
+        self._embed_condition_figure(fig)
+
+    def _plot_condition_scatter2d(self, merged, x_col, y_col, color_col, np):
+        """2D scatter; optional color column mapped to colorbar."""
+        fig, ax = plt.subplots(figsize=(8, 6))
+
+        x_vals = pd.to_numeric(merged[x_col], errors='coerce')
+        y_vals = pd.to_numeric(merged[y_col], errors='coerce')
+        valid = x_vals.notna() & y_vals.notna()
+
+        if color_col:
+            c_vals = pd.to_numeric(merged[color_col], errors='coerce')
+            c_is_numeric = c_vals.notna().sum() > len(merged) * 0.5
+
+            if c_is_numeric:
+                valid = valid & c_vals.notna()
+                sc = ax.scatter(x_vals[valid], y_vals[valid], c=c_vals[valid],
+                                cmap='viridis', s=60, alpha=0.8, edgecolors='white', linewidths=0.3)
+                cbar = fig.colorbar(sc, ax=ax, pad=0.02)
+                cbar.set_label(color_col, fontsize=12)
+            else:
+                # Categorical color
+                categories = merged[color_col].astype(str)
+                unique_cats = categories[valid].unique()
+                cmap = plt.cm.get_cmap('tab10', max(len(unique_cats), 1))
+                for i, cat in enumerate(unique_cats):
+                    mask = valid & (categories == cat)
+                    ax.scatter(x_vals[mask], y_vals[mask], color=cmap(i), s=60, alpha=0.8,
+                               label=cat, edgecolors='white', linewidths=0.3)
+                ax.legend(fontsize=9, loc='best', title=color_col)
+        else:
+            # Color by scan direction
+            scan_dirs = merged['Scan Direction'].astype(str).str.lower().str.strip()
+            dir_colors = {'fwd': 'black', 'rev': 'red'}
+            plotted = set()
+            for sd in scan_dirs[valid].unique():
+                mask = valid & (scan_dirs == sd)
+                label = sd.capitalize() if sd not in plotted else None
+                ax.scatter(x_vals[mask], y_vals[mask], color=dir_colors.get(sd, 'gray'),
+                           s=60, alpha=0.8, edgecolors='white', linewidths=0.3, label=label)
+                plotted.add(sd)
+            ax.legend(fontsize=9, loc='best')
+
+        ax.set_xlabel(x_col, fontsize=14)
+        ax.set_ylabel(y_col, fontsize=14)
+        ax.grid(True, alpha=0.4, linestyle='--')
+        plt.tight_layout()
+        self._embed_condition_figure(fig)
+
+    def _plot_condition_scatter3d(self, merged, x_col, y_col, z_col, np):
+        """3D scatter with Z as color-mapped axis."""
+        fig = plt.figure(figsize=(9, 7))
+        ax = fig.add_subplot(111, projection='3d')
+
+        x_vals = pd.to_numeric(merged[x_col], errors='coerce')
+        y_vals = pd.to_numeric(merged[y_col], errors='coerce')
+        z_vals = pd.to_numeric(merged[z_col], errors='coerce')
+        valid = x_vals.notna() & y_vals.notna() & z_vals.notna()
+
+        if valid.sum() == 0:
+            messagebox.showwarning("Warning", "No valid numeric data for all three axes.")
+            return
+
+        sc = ax.scatter(x_vals[valid], y_vals[valid], z_vals[valid],
+                        c=z_vals[valid], cmap='viridis', s=60, alpha=0.8,
+                        edgecolors='white', linewidths=0.3)
+        cbar = fig.colorbar(sc, ax=ax, pad=0.1, shrink=0.7)
+        cbar.set_label(z_col, fontsize=12)
+
+        ax.set_xlabel(x_col, fontsize=12)
+        ax.set_ylabel(y_col, fontsize=12)
+        ax.set_zlabel(z_col, fontsize=12)
+        plt.tight_layout()
+        self._embed_condition_figure(fig)
+
+    def _embed_condition_figure(self, fig):
+        """Embed a matplotlib figure into the condition sheet plot frame."""
+        self.cond_sheet_figure = fig
+        canvas = FigureCanvasTkAgg(fig, master=self.cond_sheet_plot_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    def save_condition_sheet_plot(self):
+        if self.cond_sheet_figure is None:
+            messagebox.showwarning("Warning", "No plot to save.")
+            return
+        file_path = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[("PNG", "*.png"), ("PDF", "*.pdf"), ("SVG", "*.svg"), ("All", "*.*")],
+            title="Save Condition Sheet Plot"
+        )
+        if file_path:
+            self.cond_sheet_figure.savefig(file_path, bbox_inches='tight', dpi=300)
+            messagebox.showinfo("Success", f"Plot saved to:\n{file_path}")
 
 
 if __name__ == "__main__":
