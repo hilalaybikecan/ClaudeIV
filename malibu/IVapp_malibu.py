@@ -20,14 +20,14 @@ class IVDataAnalyzer:
         self.measurements_data = pd.DataFrame(columns=[
             'Filename', 'Substrate ID', 'Pixel', 'Scan Direction',
             'Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]',
-            'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]', 'Cell Area [cm2]', 'Filepath'
+            'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]', 'Cell Area [cm2]', 'Illumination', 'Rsc Dark [Ohm.m2]', 'Filepath'
         ])
         
         # Persistent copy for display sorting (never modified directly)
         self.measurements_data_original = pd.DataFrame(columns=[
             'Filename', 'Substrate ID', 'Pixel', 'Scan Direction', 
             'Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]', 
-            'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]'
+            'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Illumination', 'Rsc Dark [Ohm.m2]'
         ])
         
         # Conditions data storage
@@ -127,7 +127,7 @@ class IVDataAnalyzer:
         # Create treeview for measurements data
         columns = ('Filename', 'Substrate ID', 'Pixel', 'Scan Direction',
                   'Voc [V]', 'Jsc [mA/cm2]', 'FF [.]', 'Efficiency [.]',
-                  'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]', 'Cell Area [cm2]')
+                  'Pmpp [W/m2]', 'Vmpp [V]', 'Jmpp [mA/cm2]', 'Roc [Ohm.m2]', 'Rsc [Ohm.m2]', 'Scan Speed [V/s]', 'Cell Area [cm2]', 'Illumination', 'Rsc Dark [Ohm.m2]')
         self.display_columns = columns
         
         self.measurements_tree = ttk.Treeview(measurements_frame, columns=self.display_columns, show='headings')
@@ -638,6 +638,13 @@ class IVDataAnalyzer:
             'Rsc [Ohm.m2]': self.extract_value(content, r'Rsc \[Ohm\.m2\]:\s*(\d+\.\d+E[+-]\d+)')
         }
         
+        # Extract illumination type
+        illum_match = re.search(r'Illumination:\s*(.+)', content)
+        illumination = illum_match.group(1).strip() if illum_match else 'Unknown'
+
+        # Rsc Dark: only populated for dark measurements
+        rsc_dark = analysis_outputs.get('Rsc [Ohm.m2]') if 'dark' in illumination.lower() else ''
+
         # Create data dictionary
         data = {
             'Filename': filename,
@@ -646,6 +653,8 @@ class IVDataAnalyzer:
             'Scan Direction': scan_direction,
             'Scan Speed [V/s]': scan_speed,
             'Cell Area [cm2]': cell_area_cm2,
+            'Illumination': illumination,
+            'Rsc Dark [Ohm.m2]': rsc_dark,
             'Filepath': filepath,
             **analysis_outputs
         }
@@ -2872,12 +2881,12 @@ class IVDataAnalyzer:
 
         sheet = self.condition_sheet_df[keep_sheet].copy()
         sheet.rename(columns={id_col: 'Substrate ID'}, inplace=True)
-        sheet['Substrate ID'] = sheet['Substrate ID'].astype(str).str.strip()
+        sheet['Substrate ID'] = sheet['Substrate ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
         sheet = sheet.drop_duplicates(subset='Substrate ID')
 
         meas = self.measurements_data.copy()
         meas = meas.drop_duplicates(subset='Filename')
-        meas['Substrate ID'] = meas['Substrate ID'].astype(str).str.strip()
+        meas['Substrate ID'] = meas['Substrate ID'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
 
         merged = meas.merge(sheet, on='Substrate ID', how='inner')
         if merged.empty:
